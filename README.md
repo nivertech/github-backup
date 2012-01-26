@@ -11,7 +11,7 @@ other forks, issues, comments, milestones, pull requests, and watchers.
 
 Or use cabal:
 
-  cabal install github-backup
+  cabal install github-backup --bindir=$HOME/bin
 
 ## Why backup Github
 

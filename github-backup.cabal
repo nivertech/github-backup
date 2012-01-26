@@ -1,0 +1,32 @@
+Name: github-backup
+Version: 1.20120126
+Cabal-Version: >= 1.6
+License: GPL
+Maintainer: Joey Hess <joey@kitenet.net>
+Author: Joey Hess
+Stability: Stable
+Copyright: 2012 Joey Hess
+License-File: GPL
+Build-Type: Simple
+Extra-Source-Files: README.md Makefile Git/Construct.hs Git/Command.hs
+ Git/Branch.hs Git/Url.hs Git/Ref.hs Git/Sha.hs Git/Types.hs
+ Git/Config.hs Git/Queue.hs Utility/Misc.hs Common.hs
+ Utility/TempFile.hs Utility/Monad.hs Utility/PartialPrelude.hs
+ Utility/Path.hs Utility/Directory.hs Utility/SafeCommand.hs Git.hs
+Homepage: https://github.com/joeyh/github-backup
+Category: Utility
+Synopsis: backs up everything github knows about a repository, to the repository
+Description:
+ github-backup is a simple tool you run in a git repository you cloned from
+ Github. It backs up everything Github knows about the repository, including
+ other forks, issues, comments, milestones, pull requests, and watchers.
+
+Executable github-backup
+  Main-Is: github-backup.hs
+  Build-Depends: MissingH, hslogger, directory, filepath, containers, mtl,
+   network, extensible-exceptions, unix, bytestring, base < 5,
+   IfElse, pretty-show, github
+
+source-repository head
+  type: git
+  location: git://github.com/joeyh/github-backup.git
