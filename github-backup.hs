@@ -57,18 +57,18 @@ remoteFor r = "github_" ++
 showRepo :: Github.Repo -> String
 showRepo = show . toGithubUserRepo
 
-runRepoWith :: (String -> String -> b -> IO (Either Github.Error v)) -> b -> Github.Repo -> IO (Maybe v)
-runRepoWith a b = run (\user repo -> a user repo b) . toGithubUserRepo
+runRepoWith :: String -> (String -> String -> b -> IO (Either Github.Error v)) -> b -> Github.Repo -> IO (Maybe v)
+runRepoWith apicall a b = run apicall (\user repo -> a user repo b) . toGithubUserRepo
 
-runRepo :: (String -> String -> IO (Either Github.Error v)) -> Github.Repo -> IO (Maybe v)
-runRepo a = run a . toGithubUserRepo
+runRepo :: String -> (String -> String -> IO (Either Github.Error v)) -> Github.Repo -> IO (Maybe v)
+runRepo apicall a = run apicall a . toGithubUserRepo
 
-run :: (String -> String -> IO (Either Github.Error v)) -> GithubUserRepo -> IO (Maybe v)
-run a r@(GithubUserRepo user repo) = handle =<< a user repo
+run :: String -> (String -> String -> IO (Either Github.Error v)) -> GithubUserRepo -> IO (Maybe v)
+run apicall a r@(GithubUserRepo user repo) = handle =<< a user repo
 	where
 		handle (Right v) = return $ Just v
 		handle (Left e) = do
-			hPutStrLn stderr $ "problem accessing API for " ++ show r ++ ": " ++ show e
+			hPutStrLn stderr $ "problem accessing API ("++ apicall ++") for " ++ show r ++ ": " ++ show e
 			return Nothing
 
 {- Finds already configured remotes that use github.
@@ -80,7 +80,7 @@ gitHubRemotes r = do
 	when (null remotes) $ error "no github remotes found"
 	forM_ repos $ \repo ->
 		Git.Command.runBool "fetch" [Param $ fromJust $ Git.Types.remoteName repo] r
-	catMaybes <$> mapM (run Github.userRepo) remotes
+	catMaybes <$> mapM (run "userrepo" Github.userRepo) remotes
 
 gitHubUserRepos :: Git.Repo -> [(Git.Repo, GithubUserRepo)]
 gitHubUserRepos = mapMaybe check . Git.Types.remotes
@@ -120,7 +120,7 @@ findForks' :: [Github.Repo] -> [Github.Repo] -> IO [Github.Repo]
 findForks' _ [] = return []
 findForks' done rs = do
 	forks <- filter new . concat . catMaybes <$>
-		mapM (runRepo Github.forksFor) rs
+		mapM (runRepo "forks" Github.forksFor) rs
 	forks' <- findForks' (done++rs) forks
 	return $ nub $ forks ++ forks'
 	where
@@ -189,16 +189,16 @@ gatherMetaData repo = do
 		]
 
 pullRequests :: Github.Repo -> IO [FilePath]
-pullRequests repo = runRepo Github.pullRequestsFor repo >>= collect
+pullRequests repo = runRepo "pullrequests" Github.pullRequestsFor repo >>= collect
 	where
 		collect Nothing = return []
 		collect (Just rs) = forM rs $ \r -> do
 			let n = Github.pullRequestNumber r
-			details <- runRepoWith Github.pullRequest n repo
+			details <- runRepoWith "pullrequest" Github.pullRequest n repo
 			saveMetaData repo ("pullrequest" </> show n) details
 
 watchers :: Github.Repo -> IO [FilePath]
-watchers repo = runRepo Github.watchersFor repo >>= collect
+watchers repo = runRepo "watchers" Github.watchersFor repo >>= collect
 	where
 		collect Nothing = return []
 		collect (Just ws) = do
@@ -206,7 +206,7 @@ watchers repo = runRepo Github.watchersFor repo >>= collect
 			return [f]
 
 issues :: Github.Repo -> IO [FilePath]
-issues repo = runRepoWith Github.issuesForRepo [] repo >>= collect
+issues repo = runRepoWith "issues" Github.issuesForRepo [] repo >>= collect
 	where
 		collect Nothing = return []
 		collect (Just is) = concat <$> forM is get
@@ -217,7 +217,7 @@ issues repo = runRepoWith Github.issuesForRepo [] repo >>= collect
 			return $ f:fs
 
 issueComments :: Int -> Github.Repo -> IO [FilePath]
-issueComments n repo = runRepoWith Github.Issues.Comments.comments n repo >>= collect
+issueComments n repo = runRepoWith "comments" Github.Issues.Comments.comments n repo >>= collect
 	where
 		collect Nothing = return []
 		collect (Just cs) = forM cs $ \c -> do
@@ -225,7 +225,7 @@ issueComments n repo = runRepoWith Github.Issues.Comments.comments n repo >>= co
 			saveMetaData repo ("issue" </> show n ++ "_comment" </> show i) c
 
 milestones :: Github.Repo -> IO [FilePath]
-milestones repo = runRepo Github.Issues.Milestones.milestones repo >>= collect
+milestones repo = runRepo "milestones" Github.Issues.Milestones.milestones repo >>= collect
 	where
 		collect Nothing = return []
 		collect (Just ms) = forM ms $ \m -> do
