@@ -54,14 +54,19 @@ your Github repositoriy is a fork of something else, the something else
 won't be backed up. There is an easy solution though. Just add the
 parent as a git remote. Then github-backup will find it, and back it up.
 
-Currently, github-backup re-downloads all issues, comments, and so on
+Currently, the Github api does not seem to provide a way to access notes
+added to commits and notes added to lines of code. So those notes won't get
+backed up.
+
+github-backup re-downloads all issues, comments, and so on
 each time it's run. This may be slow if your repo has a lot of them,
-or even if it just has a lot of forks. 
+or even if it just has a lot of forks.
 
 Bear in mind that this uses the Github API; don't run it every 5 minutes.
 Github [rate limits](http://developer.github.com/v3/#rate-limiting) the
-API to 5000 requests per hour; this could prevent github-backup
-from finishing if it goes over.
+API to 5000 requests per hour. However, github-backup *does* do an
+incremental backup, picking up where it left off, so will complete the
+backup eventually even if it's rate limited.
 
 ## Author
 

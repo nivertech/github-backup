@@ -1,4 +1,5 @@
-GHCFLAGS=-O2 -Wall
+BASEFLAGS=-Wall -fno-warn-orphans
+GHCFLAGS=-O2 $(BASEFLAGS)
 bins=github-backup
 all=$(bins)
 
@@ -16,7 +17,7 @@ endif
 all: $(all)
 
 # Disables optimisation. Not for production use.
-fast: GHCFLAGS=-Wall
+fast: GHCFLAGS=$(BASEFLAGS)
 fast: $(bins)
 
 $(bins):
