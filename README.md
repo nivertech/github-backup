@@ -33,7 +33,7 @@ like `github_linus_divemonitor`. It will fetch from every fork.
 Then the next pass will download metadata from each fork. This is stored
 into a branch named "github". Each fork gets a directory in there,
 like `linus_divemonitor`. Inside the directory there will be some
-files, like `linus_divemonitor/watchers`. There maybe be further
+files, like `linus_divemonitor/watchers`. There may be further
 directories, like for comments: `linus_divemonitor/comments/1`.
 
 You can follow the commits to the github branch to see what information
