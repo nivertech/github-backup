@@ -163,7 +163,8 @@ commitFiles :: Git.Repo -> [FilePath] -> IO ()
 commitFiles _ [] = return ()
 commitFiles r files = do
 	mass "add" [Param "-f"]
-	mass "commit" [Param "-m", Param "github-backup"]
+	_ <- catchMaybeIO $ mass "commit" [Param "-m", Param "github-backup"]
+	return ()
 	where
 		mass subcommand params = do
 			let q = Git.Queue.add Git.Queue.new subcommand params files
