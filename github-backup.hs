@@ -108,6 +108,7 @@ gitHubUrlPrefixes =
 	, "git://github.com/"
 	, "https://github.com/"
 	, "http://github.com/"
+	, "ssh://git@github.com/~/"
 	]
 
 {- Recursively look for forks, and forks of forks, of the repos.
