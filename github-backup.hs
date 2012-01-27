@@ -315,7 +315,6 @@ addFork fork = do
 		liftIO $ putStrLn $ "New fork: " ++ repoUrl fork
 		_ <- inRepo $ Git.Command.runBool "remote"
 			[ Param "add"
-			, Param "-f"
 			, Param $ remoteFor fork
 			, Param $ repoUrl fork
 			]
