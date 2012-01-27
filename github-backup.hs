@@ -218,6 +218,7 @@ store file req val = do
 	liftIO $ do
 		createDirectoryIfMissing True (parentDir f)
 		writeFile f (ppShow val)
+		putStrLn $ "\t" ++ f
 	modify $ M.insert req (Just f)
 	return $ [(req, Just f)]
 
@@ -331,6 +332,7 @@ call repo name = runRequest $ RequestSimple $ RequestBase name repo
  - Never Happen. -}
 findForks :: Git.Repo -> Backup ()
 findForks r = do
+	liftIO $ putStrLn "Finding forks..."
 	let remotes = snd $ gitHubRemotes r
 	findForks' r remotes remotes
 findForks' :: Git.Repo -> [GithubUserRepo] -> [GithubUserRepo] -> Backup ()
@@ -381,18 +383,13 @@ retryFile r = Git.gitDir r </> "github-backup.todo"
 
 retry :: Git.Repo -> Backup BackupMap
 retry r = do
-	old <- get
-	put M.empty
-	put old `after` go
-	where
-		go = do
-			todo <- liftIO $ loadRetry r
-			unless (null todo) $ do
-				liftIO $ putStrLn $
-					"Retrying " ++ show (length todo) ++
-					" requests that failed last time..."
-				mapM_ runRequest todo
-			get
+	todo <- liftIO $ loadRetry r
+	unless (null todo) $ do
+		liftIO $ putStrLn $
+			"Retrying " ++ show (length todo) ++
+			" requests that failed last time..."
+		mapM_ runRequest todo
+	get
 
 {- A backup starts by retrying any requests that failed last time.
  - This way, if API limits or other problems are stopping the backup 
