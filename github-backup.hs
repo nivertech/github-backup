@@ -10,6 +10,7 @@
 module Main where
 
 import qualified Data.Map as M
+import Data.Either
 import System.Environment
 import System.IO.Error (try)
 import Control.Exception (bracket)
@@ -62,13 +63,9 @@ requestRepo :: Request -> GithubUserRepo
 requestRepo (RequestSimple (RequestBase _ repo)) = repo
 requestRepo (RequestNum (RequestBase _ repo) _) = repo
 
-{- When a Request is run, the result indicates what Request was run,
- - and Maybe a FilePath where the data was stored. -}
-type Result = (Request, Maybe FilePath)
-
 {- Now a little monad, to remember which Requests have been run
  - already, so we can avoid doing the same thing twice. -}
-type BackupMap = M.Map Request (Maybe FilePath)
+type BackupMap = M.Map Request (Either Github.Error [FilePath])
 newtype Backup a = Backup { runBackup :: StateT BackupMap IO a }
 	deriving (
 		Monad,
@@ -78,32 +75,30 @@ newtype Backup a = Backup { runBackup :: StateT BackupMap IO a }
 		Applicative
 	)
 
-resultFiles :: [Result] -> [FilePath]
-resultFiles = catMaybes . map snd
+backupFiles :: [(Request, Either Github.Error [FilePath])] -> [FilePath]
+backupFiles = concat . rights . map snd
 
-resultFails :: [Result] -> [Request]
-resultFails = map fst . filter failed
+backupFails :: [(Request, Either Github.Error [FilePath])] -> [Request]
+backupFails = map fst . filter failed
 	where
-		failed (_, Nothing) = True
+		failed (_, Left _) = True
 		failed _ = False
 
-failedRequest :: Request -> Backup [Result]
-failedRequest req = do
-	modify $ M.insert req Nothing
-	return $ [(req, Nothing)]
+failedRequest :: Request -> Github.Error -> Backup ()
+failedRequest req e = modify $ M.insert req $ Left e
 
-runRequest :: Request -> Backup [Result]
+runRequest :: Request -> Backup ()
 runRequest req@(RequestSimple base) = runRequest' base req
 runRequest req@(RequestNum base _) = runRequest' base req
-runRequest' :: RequestBase -> Request -> Backup [Result]
+runRequest' :: RequestBase -> Request -> Backup ()
 runRequest' base req = do
 	done <- get
 	case M.lookup req done of
 		Nothing -> (lookupApi base) req
-		(Just oldresult) -> return [(req, oldresult)]
+		_ -> return ()
 
 {- List of Github api calls we can make to store their data. -}
-type Storer = Request -> Backup [Result]
+type Storer = Request -> Backup ()
 api :: M.Map ApiName Storer
 api = M.fromList
 	[ ("userrepo", userrepoStore)
@@ -162,9 +157,8 @@ issuesStore :: Storer
 issuesStore = withHelper Github.issuesForRepo [] $ forValues $ \req i -> do
 	let repo = requestRepo req
 	let n = Github.issueNumber i
-	(++)
-		<$> store ("issue" </> show n) req i
-		<*> runRequest (RequestNum (RequestBase "issuecomments" repo) n)
+	store ("issue" </> show n) req i
+	runRequest (RequestNum (RequestBase "issuecomments" repo) n)
 
 issuecommentsStore :: Storer
 issuecommentsStore = numHelper Github.Issues.Comments.comments $ \n ->
@@ -172,70 +166,65 @@ issuecommentsStore = numHelper Github.Issues.Comments.comments $ \n ->
 		let i = Github.issueCommentId c
 		store ("issue" </> show n ++ "_comment" </> show i) req c
 
-forValues :: (Request -> v -> Backup [Result]) -> Request -> [v] -> Backup [Result]
-forValues handle req vs = concat <$> forM vs (handle req)
+forValues :: (Request -> v -> Backup ()) -> Request -> [v] -> Backup ()
+forValues handle req vs = forM_ vs (handle req)
 
 simpleHelper :: (String -> String -> IO (Either Github.Error v))
-	-> (Request -> v -> Backup [Result])
+	-> (Request -> v -> Backup ())
 	-> Request
-	-> Backup [Result]
-simpleHelper query handle req@(RequestSimple (RequestBase _ repo)) =
-	go =<< liftIO (run query repo)
+	-> Backup ()
+simpleHelper query handle req@(RequestSimple (RequestBase _ (GithubUserRepo user repo))) =
+	go =<< liftIO (query user repo)
 	where
-		go Nothing = failedRequest req
-		go (Just v) = handle req v
+		go (Left e) = failedRequest req e
+		go (Right v) = handle req v
 simpleHelper _ _ r = badRequest r
 
 withHelper :: (String -> String -> b -> IO (Either Github.Error v))
 	-> b
-	-> (Request -> v -> Backup [Result])
+	-> (Request -> v -> Backup ())
 	-> Request
-	-> Backup [Result]
-withHelper query b handle req@(RequestSimple (RequestBase _ repo)) =
-	go =<< liftIO (runWith query b repo)
+	-> Backup ()
+withHelper query b handle req@(RequestSimple (RequestBase _ (GithubUserRepo user repo))) =
+	go =<< liftIO (query user repo b)
 	where
-		go Nothing = failedRequest req
-		go (Just v) = handle req v
+		go (Left e) = failedRequest req e
+		go (Right v) = handle req v
 withHelper _ _ _ r = badRequest r
 
 numHelper :: (String -> String -> Int -> IO (Either Github.Error v))
-	-> (Int -> Request -> v -> Backup [Result])
+	-> (Int -> Request -> v -> Backup ())
 	-> Request
-	-> Backup [Result]
-numHelper query handle req@(RequestNum (RequestBase _ repo) num) =
-	go =<< liftIO (runWith query num repo)
+	-> Backup ()
+numHelper query handle req@(RequestNum (RequestBase _ (GithubUserRepo user repo)) num) =
+	go =<< liftIO (query user repo num)
 	where
-		go Nothing = failedRequest req
-		go (Just v) = handle num req v
+		go (Left e) = failedRequest req e
+		go (Right v) = handle num req v
 numHelper _ _ r = badRequest r
 
 badRequest :: Request -> a
 badRequest r = error $ "internal error: bad request type " ++ show r
 
-store :: Show a => FilePath -> Request -> a -> Backup [Result]
+store :: Show a => FilePath -> Request -> a -> Backup ()
 store file req val = do
 	let f = storedFile file $ requestRepo req
 	liftIO $ do
 		createDirectoryIfMissing True (parentDir f)
 		writeFile f (ppShow val)
 		putStrLn $ "\t" ++ f
-	modify $ M.insert req (Just f)
-	return $ [(req, Just f)]
+	modify $ M.insertWith comb req (Right [f])
+	where
+		comb (Right a) (Right b) = Right $ a ++ b
+		comb (Right a) _ = Right a
+		comb _ (Right b) = Right b
+		comb (Left e) _ = Left e
 
-storeSorted :: Ord a => Show a => FilePath -> Request -> [a] -> Backup [Result]
+storeSorted :: Ord a => Show a => FilePath -> Request -> [a] -> Backup ()
 storeSorted file req val = store file req (sort val)
 
 storedFile :: FilePath -> GithubUserRepo -> FilePath
 storedFile file (GithubUserRepo user repo) = user ++ "_" ++ repo </> file
-
-runWith :: (String -> String -> b -> IO (Either Github.Error v)) -> b -> GithubUserRepo -> IO (Maybe v)
-runWith a b r = run (\user repo -> a user repo b) r
-
-run :: (String -> String -> IO (Either Github.Error v)) -> GithubUserRepo -> IO (Maybe v)
-run a (GithubUserRepo user repo) = handle =<< a user repo
-	where
-		handle (Right v) = return $ Just v
-		handle _ = return Nothing
 
 {- Finds already configured remotes that use github. -}
 gitHubRemotes :: Git.Repo -> ([Git.Repo], [GithubUserRepo])
@@ -320,7 +309,7 @@ gatherMetaData repo = do
 	liftIO $ putStrLn $ "Gathering metadata for " ++ repoUrl repo ++ " ..."
 	mapM_ (call repo) toplevelApi
 
-call :: GithubUserRepo -> ApiName -> Backup [Result]
+call :: GithubUserRepo -> ApiName -> Backup ()
 call repo name = runRequest $ RequestSimple $ RequestBase name repo
 
 {- Find forks of the repos. Then go on to find forks of the forks, etc.
@@ -338,14 +327,15 @@ findForks r = do
 findForks' :: Git.Repo -> [GithubUserRepo] -> [GithubUserRepo] -> Backup ()
 findForks' _ _ [] = return ()
 findForks' r done rs = do
-	res <- concat <$> mapM query rs
-	new <- findnew res
+	mapM_ query rs
+	new <- findnew
 	findForks' r (done++rs) new
 	where
 		query repo = call repo "forks"
-		findnew res = do
-			forks <- concat . catMaybes <$>
-				mapM readfork (resultFiles res)
+		findnew = do
+			files <- filter ("/forks" `isSuffixOf`) . 
+				backupFiles . M.toList <$> get
+			forks <- concat . catMaybes <$> mapM readfork files
 			let new = excludedone $ map toGithubUserRepo $ forks
 			mapM_ addfork new
 			return new
@@ -411,7 +401,7 @@ backup r = do
 
 	save r' retried
 
-{- Save all backup results. Files that were written are committed.
+{- Save all backup data. Files that were written are committed.
  - Requests that failed are saved for next time. Requests that were retried
  - this time and failed are ordered last, to ensure that we don't get stuck
  - retrying the same requests and not making progress when run again.
@@ -420,8 +410,8 @@ save :: Git.Repo -> BackupMap -> Backup ()
 save r retried = do
 	done <- get
 	let ordered = M.toList (done `M.difference` retried) ++ M.toList retried
-	liftIO $ commitFiles r $ resultFiles ordered
-	let fails = resultFails ordered
+	liftIO $ commitFiles r $ backupFiles ordered
+	let fails = backupFails ordered
 	liftIO $ storeRetry r fails
 	unless (null fails) $ do
 		error $ "Backup may be incomplete; " ++
