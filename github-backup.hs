@@ -326,11 +326,10 @@ findForks r = do
 findForks' :: Git.Repo -> [GithubUserRepo] -> [GithubUserRepo] -> Backup ()
 findForks' _ _ [] = return ()
 findForks' r done rs = do
-	mapM_ query rs
+	mapM_ (`call` "forks") rs
 	new <- findnew
-	findForks' r (done++rs) new
+	findForks' r (done++new) new
 	where
-		query repo = call repo "forks"
 		findnew = do
 			files <- filter ("/forks" `isSuffixOf`) . 
 				backupFiles . M.toList <$> get
