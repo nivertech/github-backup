@@ -127,11 +127,11 @@ api = M.fromList
 toplevelApi :: [ApiName]
 toplevelApi =
 	[ "userrepo"
-	, "forks"
 	, "watchers"
 	, "pullrequests"
 	, "milestones"
 	, "issues"
+	, "forks" -- comes last because it recurses on to the forks
 	]
 
 lookupApi :: RequestBase -> Storer
@@ -141,9 +141,6 @@ lookupApi (RequestBase name _) = fromMaybe bad $ M.lookup name api
 
 userrepoStore :: Storer
 userrepoStore = simpleHelper Github.userRepo $ store "repo"
-
-forksStore :: Storer
-forksStore = simpleHelper Github.forksFor $ storeSorted "forks"
 
 watchersStore :: Storer
 watchersStore = simpleHelper Github.watchersFor $ storeSorted "watchers"
@@ -177,6 +174,15 @@ issuecommentsStore = numHelper Github.Issues.Comments.comments $ \n ->
 	forValues $ \req c -> do
 		let i = Github.issueCommentId c
 		store ("issue" </> show n ++ "_comment" </> show i) req c
+
+forksStore :: Storer
+forksStore = simpleHelper Github.forksFor $ \req fs -> do
+	storeSorted "forks" req fs
+	mapM_ (traverse . toGithubUserRepo) fs
+	where
+		traverse fork = do
+			addFork fork
+			gatherMetaData fork
 
 forValues :: (Request -> v -> Backup ()) -> Request -> [v] -> Backup ()
 forValues handle req vs = forM_ vs (handle req)
@@ -237,15 +243,14 @@ storeSorted file req val = store file req (sort val)
 storedFile :: FilePath -> GithubUserRepo -> FilePath
 storedFile file (GithubUserRepo user repo) = user ++ "_" ++ repo </> file
 
-{- Finds already configured remotes that use github. -}
-gitHubRemotes :: Backup ([Git.Repo], [GithubUserRepo])
-gitHubRemotes = go =<< gitHubUserRepos <$> gets backupRepo
-	where
-		go [] = error "no github remotes found"
-		go rs = return $ unzip rs
+gitHubRepos :: Backup [Git.Repo]
+gitHubRepos = fst . gitHubPairs <$> gets backupRepo
 
-gitHubUserRepos :: Git.Repo -> [(Git.Repo, GithubUserRepo)]
-gitHubUserRepos = mapMaybe check . Git.Types.remotes
+gitHubRemotes :: Backup [GithubUserRepo]
+gitHubRemotes = snd . gitHubPairs <$> gets backupRepo
+
+gitHubPairs :: Git.Repo -> ([Git.Repo], [GithubUserRepo])
+gitHubPairs = unzip . mapMaybe check . Git.Types.remotes
 	where
 		check r@Git.Repo { Git.Types.location = Git.Types.Url u } =
 			headMaybe $ mapMaybe (checkurl r $ show u) gitHubUrlPrefixes
@@ -304,13 +309,33 @@ commitFiles files r = do
 			_ <- Git.Queue.flush q r
 			return ()
 
-{- Fetches from a git remote. github-backup does this for all github
- - remotes, just because it would be weird for a backup to not fetch
- - all available data. Even though its real focus is on metadata not stored
- - in git. -}
-fetch :: [Git.Repo] -> Git.Repo -> IO ()
-fetch repos r = forM_ repos $ \repo ->
-	Git.Command.runBool "fetch" [Param $ fromJust $ Git.Types.remoteName repo] r
+addFork :: GithubUserRepo -> Backup ()
+addFork fork = do
+	remotes <- gitHubRemotes
+	unless (fork `elem` remotes) $ do
+		liftIO $ putStrLn $ "New fork: " ++ repoUrl fork
+		_ <- inRepo $ Git.Command.runBool "remote"
+			[ Param "add"
+			, Param "-f"
+			, Param $ remoteFor fork
+			, Param $ repoUrl fork
+			]
+		-- re-read git config to get the added remote
+		r <- inRepo Git.Config.read
+		modify $ \s -> s { backupRepo = r }
+	where
+		remoteFor (GithubUserRepo user repo) =
+			"github_" ++ user ++ "_" ++ repo
+
+{- Fetches from the github remotes. Done by githb-backup, just because
+ - it would be weird for a backup to not fetch all available data.
+ - Even though its real focus is on metadata not stored in git. -}
+fetchRepos :: Backup ()
+fetchRepos = do
+	repos <- gitHubRepos
+	forM_ repos $ \repo -> inRepo $
+		Git.Command.runBool "fetch"
+			[Param $ fromJust $ Git.Types.remoteName repo]
 
 {- Gathers metadata for the repo. Retuns a list of files written
  - and a list that may contain requests that need to be retried later. -}
@@ -321,46 +346,6 @@ gatherMetaData repo = do
 
 call :: GithubUserRepo -> ApiName -> Backup ()
 call repo name = runRequest $ RequestSimple $ RequestBase name repo
-
-{- Find forks of the repos. Then go on to find forks of the forks, etc.
- -
- - Each time a new fork is found, it's added as a git remote, and
- - fetched from.
- -
- - Note that this code guards against fork cycles, although that Should
- - Never Happen. -}
-findForks :: Backup ()
-findForks = do
-	liftIO $ putStrLn "Finding forks..."
-	remotes <- snd <$> gitHubRemotes
-	findForks' remotes remotes
-findForks' :: [GithubUserRepo] -> [GithubUserRepo] -> Backup ()
-findForks' _ [] = return ()
-findForks' done rs = do
-	mapM_ (`call` "forks") rs
-	new <- findnew
-	findForks' (done++new) new
-	where
-		findnew = do
-			files <- filter ("/forks" `isSuffixOf`) . 
-				backupFiles . M.toList <$> gets backupDone
-			forks <- concat . catMaybes <$> mapM readfork files
-			let new = excludedone $ map toGithubUserRepo $ forks
-			mapM_ addfork new
-			return new
-		excludedone l = l \\ done
-		readfork :: FilePath -> Backup (Maybe [Github.Repo])
-		readfork file = liftIO $ readish <$> readFile file
-		addfork fork = do
-			liftIO $ putStrLn $ "New fork: " ++ repoUrl fork
-			inRepo $ Git.Command.runBool "remote"
-				[ Param "add"
-				, Param "-f"
-				, Param $ remoteFor fork
-				, Param $ repoUrl fork
-				]
-		remoteFor (GithubUserRepo user repo) =
-			"github_" ++ user ++ "_" ++ repo
 
 storeRetry :: [Request] -> Git.Repo -> IO ()
 storeRetry [] r = do
@@ -390,24 +375,14 @@ retry = do
 		mapM_ runRequest todo
 	gets backupDone
 
-{- A backup starts by retrying any requests that failed last time.
- - This way, if API limits or other problems are stopping the backup 
- - part way through, incremental progress is made.
- -
- - The backup process first finds forks on github. Then for each fork,
- - it looks up all the metadata.
- -}
 backup :: Backup ()
 backup = do
+	remotes <- gitHubRemotes
+	when (null remotes) $ do
+		error "no github remotes found"
 	retried <- retry
-
-	findForks
-	--r' <- liftIO $ Git.Config.read r
-
-	(repos, remotes) <- gitHubRemotes
-	inRepo $ fetch repos
-	forM_ remotes gatherMetaData
-
+	mapM_ gatherMetaData remotes
+	fetchRepos
 	save retried
 
 {- Save all backup data. Files that were written are committed.
