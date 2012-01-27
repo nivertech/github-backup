@@ -63,13 +63,14 @@ requestRepo :: Request -> GithubUserRepo
 requestRepo (RequestSimple (RequestBase _ repo)) = repo
 requestRepo (RequestNum (RequestBase _ repo) _) = repo
 
-{- Now a little monad, to remember which Requests have been run
- - already, so we can avoid doing the same thing twice. -}
 type BackupMap = M.Map Request (Either Github.Error [FilePath])
+
 data BackupState = BackupState
 	{ backupDone :: BackupMap
 	, backupRepo :: Git.Repo
 	}
+
+{- Our monad. -}
 newtype Backup a = Backup { runBackup :: StateT BackupState IO a }
 	deriving (
 		Monad,
@@ -99,6 +100,8 @@ backupFails = map fst . filter failed
 failedRequest :: Request -> Github.Error -> Backup ()
 failedRequest req e = changeDone $ M.insert req $ Left e
 
+{- A given request in only run once. This is to avoid retries and other
+ - loops. -}
 runRequest :: Request -> Backup ()
 runRequest req@(RequestSimple base) = runRequest' base req
 runRequest req@(RequestNum base _) = runRequest' base req
@@ -187,35 +190,31 @@ forksStore = simpleHelper Github.forksFor $ \req fs -> do
 forValues :: (Request -> v -> Backup ()) -> Request -> [v] -> Backup ()
 forValues handle req vs = forM_ vs (handle req)
 
-simpleHelper :: (String -> String -> IO (Either Github.Error v))
-	-> (Request -> v -> Backup ())
-	-> Request
-	-> Backup ()
-simpleHelper query handle req@(RequestSimple (RequestBase _ (GithubUserRepo user repo))) =
-	go =<< liftIO (query user repo)
+type ApiCall v = String -> String -> IO (Either Github.Error v)
+type ApiWith v b = String -> String -> b -> IO (Either Github.Error v)
+type ApiNum v = ApiWith v Int
+type Handler v = Request -> v -> Backup ()
+type Helper = Request -> Backup ()
+
+simpleHelper :: ApiCall v -> Handler v -> Helper
+simpleHelper call handle req@(RequestSimple (RequestBase _ (GithubUserRepo user repo))) =
+	go =<< liftIO (call user repo)
 	where
 		go (Left e) = failedRequest req e
 		go (Right v) = handle req v
 simpleHelper _ _ r = badRequest r
 
-withHelper :: (String -> String -> b -> IO (Either Github.Error v))
-	-> b
-	-> (Request -> v -> Backup ())
-	-> Request
-	-> Backup ()
-withHelper query b handle req@(RequestSimple (RequestBase _ (GithubUserRepo user repo))) =
-	go =<< liftIO (query user repo b)
+withHelper :: ApiWith v b -> b -> Handler v -> Helper
+withHelper call b handle req@(RequestSimple (RequestBase _ (GithubUserRepo user repo))) =
+	go =<< liftIO (call user repo b)
 	where
 		go (Left e) = failedRequest req e
 		go (Right v) = handle req v
 withHelper _ _ _ r = badRequest r
 
-numHelper :: (String -> String -> Int -> IO (Either Github.Error v))
-	-> (Int -> Request -> v -> Backup ())
-	-> Request
-	-> Backup ()
-numHelper query handle req@(RequestNum (RequestBase _ (GithubUserRepo user repo)) num) =
-	go =<< liftIO (query user repo num)
+numHelper :: ApiNum v -> (Int -> Handler v) -> Helper
+numHelper call handle req@(RequestNum (RequestBase _ (GithubUserRepo user repo)) num) =
+	go =<< liftIO (call user repo num)
 	where
 		go (Left e) = failedRequest req e
 		go (Right v) = handle num req v
@@ -342,10 +341,10 @@ fetchRepos = do
 gatherMetaData :: GithubUserRepo -> Backup ()
 gatherMetaData repo = do
 	liftIO $ putStrLn $ "Gathering metadata for " ++ repoUrl repo ++ " ..."
-	mapM_ (call repo) toplevelApi
-
-call :: GithubUserRepo -> ApiName -> Backup ()
-call repo name = runRequest $ RequestSimple $ RequestBase name repo
+	mapM_ call toplevelApi
+	where
+		call name = runRequest $
+			RequestSimple $ RequestBase name repo
 
 storeRetry :: [Request] -> Git.Repo -> IO ()
 storeRetry [] r = do
