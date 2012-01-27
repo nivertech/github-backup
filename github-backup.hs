@@ -184,7 +184,7 @@ simpleHelper query handle req@(RequestSimple (RequestBase _ repo)) =
 	where
 		go Nothing = failedRequest req
 		go (Just v) = handle req v
-simpleHelper _ _ r = error $ "internal error: bad request type " ++ show r
+simpleHelper _ _ r = badRequest r
 
 withHelper :: (String -> String -> b -> IO (Either Github.Error v))
 	-> b
@@ -196,7 +196,7 @@ withHelper query b handle req@(RequestSimple (RequestBase _ repo)) =
 	where
 		go Nothing = failedRequest req
 		go (Just v) = handle req v
-withHelper _ _ _ r = error $ "internal error: bad request type " ++ show r
+withHelper _ _ _ r = badRequest r
 
 numHelper :: (String -> String -> Int -> IO (Either Github.Error v))
 	-> (Int -> Request -> v -> Backup [Result])
@@ -207,7 +207,10 @@ numHelper query handle req@(RequestNum (RequestBase _ repo) num) =
 	where
 		go Nothing = failedRequest req
 		go (Just v) = handle num req v
-numHelper _ _ r = error $ "internal error: bad request type " ++ show r
+numHelper _ _ r = badRequest r
+
+badRequest :: Request -> a
+badRequest r = error $ "internal error: bad request type " ++ show r
 
 store :: Show a => FilePath -> Request -> a -> Backup [Result]
 store file req val = do
@@ -375,6 +378,21 @@ loadRetry r = do
 retryFile :: Git.Repo -> FilePath
 retryFile r = Git.gitDir r </> "github-backup.todo"
 
+retry :: Git.Repo -> Backup BackupMap
+retry r = do
+	old <- get
+	put M.empty
+	put old `after` go
+	where
+		go = do
+			todo <- liftIO $ loadRetry r
+			unless (null todo) $ do
+				liftIO $ putStrLn $
+					"Retrying " ++ show (length todo) ++
+					" requests that failed last time..."
+				mapM_ runRequest todo
+			get
+
 {- A backup starts by retrying any requests that failed last time.
  - This way, if API limits or other problems are stopping the backup 
  - part way through, incremental progress is made.
@@ -384,13 +402,7 @@ retryFile r = Git.gitDir r </> "github-backup.todo"
  -}
 backup :: Git.Repo -> Backup ()
 backup r = do
-	retry <- liftIO (loadRetry r)
-	unless (null retry) $ do
-		liftIO $ putStrLn $
-			"Retrying " ++ show (length retry) ++
-			" requests that failed last time..."
-		mapM_ runRequest retry
-	retried <- get
+	retried <- retry r
 
 	findForks r
 	r' <- liftIO $ Git.Config.read r
