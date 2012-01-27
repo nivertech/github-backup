@@ -1,5 +1,5 @@
 github-backup is a simple tool you run in a git repository you cloned from
-Github. It backs up everything Github knows about the repository, including
+Github. It backs up everything Github publishes about the repository, including
 other forks, issues, comments, milestones, pull requests, and watchers.
 
 ## Installation
@@ -48,11 +48,14 @@ github-backup is repository-focused. It does not try to back up other
 information from Github. In particular, social network stuff, like
 users who are following you, is not backed up.
 
-github-backup will find and backup all forks of a repository, and all forks
+github-backup will find and backup forks of a repository, and all forks
 of those forks, etc. However, it cannot go *up* the fork tree. So if
 your Github repositoriy is a fork of something else, the something else
 won't be backed up. There is an easy solution though. Just add the
 parent as a git remote. Then github-backup will find it, and back it up.
+
+Currently, only 30 of each thing will be returned. This is a bug in 
+the haskell github library I'm using. Hope to get it fixed soon.
 
 Currently, the Github api does not seem to provide a way to access notes
 added to commits and notes added to lines of code. So those notes won't get
