@@ -1,0 +1,43 @@
+[ GithubUser
+    { githubUserAvatarUrl = "https://secure.gravatar.com/avatar/23b07b3f9bf1d5c3e2c8c3f5947684ff?d=https://a248.e.akamai.net/assets.github.com%2Fimages%2Fgravatars%2Fgravatar-140.png"
+    , githubUserLogin = "lemmy"
+    , githubUserUrl = "https://api.github.com/users/lemmy"
+    , githubUserId = 88777
+    , githubUserGravatarId = "23b07b3f9bf1d5c3e2c8c3f5947684ff"
+    }
+, GithubUser
+    { githubUserAvatarUrl = "https://secure.gravatar.com/avatar/3c132a793564d12ac0faf3aff86c4708?d=https://a248.e.akamai.net/assets.github.com%2Fimages%2Fgravatars%2Fgravatar-140.png"
+    , githubUserLogin = "ode79"
+    , githubUserUrl = "https://api.github.com/users/ode79"
+    , githubUserId = 227520
+    , githubUserGravatarId = "3c132a793564d12ac0faf3aff86c4708"
+    }
+, GithubUser
+    { githubUserAvatarUrl = "https://secure.gravatar.com/avatar/7aea85346a93c59c4ae829659e489d18?d=https://a248.e.akamai.net/assets.github.com%2Fimages%2Fgravatars%2Fgravatar-140.png"
+    , githubUserLogin = "joeyh"
+    , githubUserUrl = "https://api.github.com/users/joeyh"
+    , githubUserId = 16392
+    , githubUserGravatarId = "7aea85346a93c59c4ae829659e489d18"
+    }
+, GithubUser
+    { githubUserAvatarUrl = "https://secure.gravatar.com/avatar/8e525630eeb635e6816ce1bcb18c7274?d=https://a248.e.akamai.net/assets.github.com%2Fimages%2Fgravatars%2Fgravatar-140.png"
+    , githubUserLogin = "rbrito"
+    , githubUserUrl = "https://api.github.com/users/rbrito"
+    , githubUserId = 212145
+    , githubUserGravatarId = "8e525630eeb635e6816ce1bcb18c7274"
+    }
+, GithubUser
+    { githubUserAvatarUrl = "https://secure.gravatar.com/avatar/9ccfa413807e1c3aaa0f10ee1deef143?d=https://a248.e.akamai.net/assets.github.com%2Fimages%2Fgravatars%2Fgravatar-140.png"
+    , githubUserLogin = "scotu"
+    , githubUserUrl = "https://api.github.com/users/scotu"
+    , githubUserId = 868
+    , githubUserGravatarId = "9ccfa413807e1c3aaa0f10ee1deef143"
+    }
+, GithubUser
+    { githubUserAvatarUrl = "https://secure.gravatar.com/avatar/f7c6bfa28aed15983134c096b6e4fec8?d=https://a248.e.akamai.net/assets.github.com%2Fimages%2Fgravatars%2Fgravatar-140.png"
+    , githubUserLogin = "mcg"
+    , githubUserUrl = "https://api.github.com/users/mcg"
+    , githubUserId = 305
+    , githubUserGravatarId = "f7c6bfa28aed15983134c096b6e4fec8"
+    }
+]
