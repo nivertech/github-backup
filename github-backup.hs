@@ -66,14 +66,26 @@ requestRepo (RequestNum (RequestBase _ repo) _) = repo
 {- Now a little monad, to remember which Requests have been run
  - already, so we can avoid doing the same thing twice. -}
 type BackupMap = M.Map Request (Either Github.Error [FilePath])
-newtype Backup a = Backup { runBackup :: StateT BackupMap IO a }
+data BackupState = BackupState
+	{ backupDone :: BackupMap
+	, backupRepo :: Git.Repo
+	}
+newtype Backup a = Backup { runBackup :: StateT BackupState IO a }
 	deriving (
 		Monad,
-		MonadState BackupMap,
+		MonadState BackupState,
 		MonadIO,
 		Functor,
 		Applicative
 	)
+
+inRepo :: (Git.Repo -> IO a) -> Backup a
+inRepo a = liftIO . a =<< gets backupRepo
+
+changeDone :: (BackupMap -> BackupMap) -> Backup ()
+changeDone a = do
+	done <- gets backupDone
+	modify $ \s -> s { backupDone = a done }
 
 backupFiles :: [(Request, Either Github.Error [FilePath])] -> [FilePath]
 backupFiles = concat . rights . map snd
@@ -85,14 +97,14 @@ backupFails = map fst . filter failed
 		failed _ = False
 
 failedRequest :: Request -> Github.Error -> Backup ()
-failedRequest req e = modify $ M.insert req $ Left e
+failedRequest req e = changeDone $ M.insert req $ Left e
 
 runRequest :: Request -> Backup ()
 runRequest req@(RequestSimple base) = runRequest' base req
 runRequest req@(RequestNum base _) = runRequest' base req
 runRequest' :: RequestBase -> Request -> Backup ()
 runRequest' base req = do
-	done <- get
+	done <- gets backupDone
 	case M.lookup req done of
 		Nothing -> (lookupApi base) req
 		_ -> return ()
@@ -212,7 +224,7 @@ store file req val = do
 	liftIO $ do
 		createDirectoryIfMissing True (parentDir f)
 		writeFile f (ppShow val)
-	modify $ M.insertWith comb req (Right [f])
+	changeDone $ M.insertWith comb req (Right [f])
 	where
 		comb (Right a) (Right b) = Right $ a ++ b
 		comb (Right a) _ = Right a
@@ -226,12 +238,11 @@ storedFile :: FilePath -> GithubUserRepo -> FilePath
 storedFile file (GithubUserRepo user repo) = user ++ "_" ++ repo </> file
 
 {- Finds already configured remotes that use github. -}
-gitHubRemotes :: Git.Repo -> ([Git.Repo], [GithubUserRepo])
-gitHubRemotes r
-	| null rs = error "no github remotes found"
-	| otherwise = unzip rs
+gitHubRemotes :: Backup ([Git.Repo], [GithubUserRepo])
+gitHubRemotes = go =<< gitHubUserRepos <$> gets backupRepo
 	where
-		rs = gitHubUserRepos r
+		go [] = error "no github remotes found"
+		go rs = return $ unzip rs
 
 gitHubUserRepos :: Git.Repo -> [(Git.Repo, GithubUserRepo)]
 gitHubUserRepos = mapMaybe check . Git.Types.remotes
@@ -281,9 +292,9 @@ onGithubBranch r a = bracket prep cleanup (const a)
 		checkout params = Git.Command.run "checkout" (Param "-q" : params) r
 		branchname = "github"
 
-commitFiles :: Git.Repo -> [FilePath] -> IO ()
-commitFiles _ [] = return ()
-commitFiles r files = do
+commitFiles :: [FilePath] -> Git.Repo -> IO ()
+commitFiles [] _ = return ()
+commitFiles files r = do
 	mass "add" [Param "-f"]
 	_ <- catchMaybeIO $ mass "commit" [Param "-m", Param "github-backup"]
 	return ()
@@ -318,21 +329,21 @@ call repo name = runRequest $ RequestSimple $ RequestBase name repo
  -
  - Note that this code guards against fork cycles, although that Should
  - Never Happen. -}
-findForks :: Git.Repo -> Backup ()
-findForks r = do
+findForks :: Backup ()
+findForks = do
 	liftIO $ putStrLn "Finding forks..."
-	let remotes = snd $ gitHubRemotes r
-	findForks' r remotes remotes
-findForks' :: Git.Repo -> [GithubUserRepo] -> [GithubUserRepo] -> Backup ()
-findForks' _ _ [] = return ()
-findForks' r done rs = do
+	remotes <- snd <$> gitHubRemotes
+	findForks' remotes remotes
+findForks' :: [GithubUserRepo] -> [GithubUserRepo] -> Backup ()
+findForks' _ [] = return ()
+findForks' done rs = do
 	mapM_ (`call` "forks") rs
 	new <- findnew
-	findForks' r (done++new) new
+	findForks' (done++new) new
 	where
 		findnew = do
 			files <- filter ("/forks" `isSuffixOf`) . 
-				backupFiles . M.toList <$> get
+				backupFiles . M.toList <$> gets backupDone
 			forks <- concat . catMaybes <$> mapM readfork files
 			let new = excludedone $ map toGithubUserRepo $ forks
 			mapM_ addfork new
@@ -340,22 +351,22 @@ findForks' r done rs = do
 		excludedone l = l \\ done
 		readfork :: FilePath -> Backup (Maybe [Github.Repo])
 		readfork file = liftIO $ readish <$> readFile file
-		addfork fork = liftIO $ do
-			putStrLn $ "New fork: " ++ repoUrl fork
-			Git.Command.runBool "remote"
+		addfork fork = do
+			liftIO $ putStrLn $ "New fork: " ++ repoUrl fork
+			inRepo $ Git.Command.runBool "remote"
 				[ Param "add"
 				, Param "-f"
 				, Param $ remoteFor fork
 				, Param $ repoUrl fork
-				] r
+				]
 		remoteFor (GithubUserRepo user repo) =
 			"github_" ++ user ++ "_" ++ repo
 
-storeRetry :: Git.Repo -> [Request] -> IO ()
-storeRetry r [] = do
+storeRetry :: [Request] -> Git.Repo -> IO ()
+storeRetry [] r = do
 	_ <- try $ removeFile (retryFile r)
 	return ()
-storeRetry r retryrequests = writeFile (retryFile r) (show retryrequests)
+storeRetry retryrequests r = writeFile (retryFile r) (show retryrequests)
 
 loadRetry :: Git.Repo -> IO [Request]
 loadRetry r = do
@@ -369,15 +380,15 @@ loadRetry r = do
 retryFile :: Git.Repo -> FilePath
 retryFile r = Git.gitDir r </> "github-backup.todo"
 
-retry :: Git.Repo -> Backup BackupMap
-retry r = do
-	todo <- liftIO $ loadRetry r
+retry :: Backup BackupMap
+retry = do
+	todo <- inRepo $ loadRetry
 	unless (null todo) $ do
 		liftIO $ putStrLn $
 			"Retrying " ++ show (length todo) ++
 			" requests that failed last time..."
 		mapM_ runRequest todo
-	get
+	gets backupDone
 
 {- A backup starts by retrying any requests that failed last time.
  - This way, if API limits or other problems are stopping the backup 
@@ -386,31 +397,31 @@ retry r = do
  - The backup process first finds forks on github. Then for each fork,
  - it looks up all the metadata.
  -}
-backup :: Git.Repo -> Backup ()
-backup r = do
-	retried <- retry r
+backup :: Backup ()
+backup = do
+	retried <- retry
 
-	findForks r
-	r' <- liftIO $ Git.Config.read r
+	findForks
+	--r' <- liftIO $ Git.Config.read r
 
-	let (repos, remotes) = gitHubRemotes r'
-	liftIO $ fetch repos r'
+	(repos, remotes) <- gitHubRemotes
+	inRepo $ fetch repos
 	forM_ remotes gatherMetaData
 
-	save r' retried
+	save retried
 
 {- Save all backup data. Files that were written are committed.
  - Requests that failed are saved for next time. Requests that were retried
  - this time and failed are ordered last, to ensure that we don't get stuck
  - retrying the same requests and not making progress when run again.
  -}
-save :: Git.Repo -> BackupMap -> Backup ()
-save r retried = do
-	done <- get
+save :: BackupMap -> Backup ()
+save retried = do
+	done <- gets backupDone
 	let ordered = M.toList (done `M.difference` retried) ++ M.toList retried
-	liftIO $ commitFiles r $ backupFiles ordered
+	inRepo $ commitFiles $ backupFiles ordered
 	let fails = backupFails ordered
-	liftIO $ storeRetry r fails
+	inRepo $ storeRetry fails
 	unless (null fails) $ do
 		error $ "Backup may be incomplete; " ++
 			show (length fails) ++
@@ -420,7 +431,7 @@ usage :: String
 usage = "usage: github-backup [directory]"
 
 getLocalRepo :: IO Git.Repo
-getLocalRepo = getArgs >>= make >>= Git.Config.read 
+getLocalRepo = getArgs >>= make >>= Git.Config.read
 	where
 		make [] = Git.Construct.fromCwd
 		make (d:[]) = Git.Construct.fromPath d
@@ -430,4 +441,5 @@ main :: IO ()
 main = do
 	r <- getLocalRepo
 	changeWorkingDirectory $ Git.repoLocation r
-	onGithubBranch r $ evalStateT (runBackup $ backup r) M.empty
+	let backupstate = BackupState M.empty r
+	onGithubBranch r $ evalStateT (runBackup backup) backupstate
