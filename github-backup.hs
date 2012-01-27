@@ -342,12 +342,13 @@ findForks' r done rs = do
 	where
 		query repo = call repo "forks"
 		findnew res = do
-			let files = resultFiles res
-			new <- excludedone . map toGithubUserRepo .
-				catMaybes <$> mapM readfork files
+			forks <- concat . catMaybes <$>
+				mapM readfork (resultFiles res)
+			let new = excludedone $ map toGithubUserRepo $ forks
 			mapM_ addfork new
 			return new
 		excludedone l = l \\ done
+		readfork :: FilePath -> Backup (Maybe [Github.Repo])
 		readfork file = liftIO $ readish <$> readFile file
 		addfork fork = liftIO $ do
 			putStrLn $ "New fork: " ++ repoUrl fork
