@@ -212,7 +212,6 @@ store file req val = do
 	liftIO $ do
 		createDirectoryIfMissing True (parentDir f)
 		writeFile f (ppShow val)
-		putStrLn $ "\t" ++ f
 	modify $ M.insertWith comb req (Right [f])
 	where
 		comb (Right a) (Right b) = Right $ a ++ b
