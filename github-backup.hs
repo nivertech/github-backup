@@ -10,6 +10,7 @@
 module Main where
 
 import qualified Data.Map as M
+import qualified Data.Set as S
 import Data.Either
 import System.Environment
 import System.IO.Error (try)
@@ -118,6 +119,7 @@ api :: M.Map ApiName Storer
 api = M.fromList
 	[ ("userrepo", userrepoStore)
 	, ("forks", forksStore)
+	, ("moreforks", moreforksStore)
 	, ("watchers", watchersStore)
 	, ("pullrequests", pullrequestsStore)
 	, ("pullrequest", pullrequestStore)
@@ -179,8 +181,17 @@ issuecommentsStore = numHelper Github.Issues.Comments.comments $ \n ->
 		store ("issue" </> show n ++ "_comment" </> show i) req c
 
 forksStore :: Storer
-forksStore = simpleHelper Github.forksFor $ \req fs -> do
-	storeSorted "forks" req fs
+forksStore = simpleHelper Github.forksFor $ handleForks 1
+
+moreforksStore :: Storer
+moreforksStore = numHelper Github.forksForPage handleForks
+
+handleForks :: Int -> Request -> [Github.Issues.Milestones.Repo] -> Backup ()
+handleForks _ _ [] = return () -- reached an empty page
+handleForks page req fs = do
+	storeAppend "forks" req fs
+	let repo = requestRepo req
+	runRequest (RequestNum (RequestBase "moreforks" repo) (page+1))
 	mapM_ (traverse . toGithubUserRepo) fs
 	where
 		traverse fork = do
@@ -194,9 +205,8 @@ type ApiCall v = String -> String -> IO (Either Github.Error v)
 type ApiWith v b = String -> String -> b -> IO (Either Github.Error v)
 type ApiNum v = ApiWith v Int
 type Handler v = Request -> v -> Backup ()
-type Helper = Request -> Backup ()
 
-simpleHelper :: ApiCall v -> Handler v -> Helper
+simpleHelper :: ApiCall v -> Handler v -> Storer
 simpleHelper call handle req@(RequestSimple (RequestBase _ (GithubUserRepo user repo))) =
 	go =<< liftIO (call user repo)
 	where
@@ -204,7 +214,7 @@ simpleHelper call handle req@(RequestSimple (RequestBase _ (GithubUserRepo user 
 		go (Right v) = handle req v
 simpleHelper _ _ r = badRequest r
 
-withHelper :: ApiWith v b -> b -> Handler v -> Helper
+withHelper :: ApiWith v b -> b -> Handler v -> Storer
 withHelper call b handle req@(RequestSimple (RequestBase _ (GithubUserRepo user repo))) =
 	go =<< liftIO (call user repo b)
 	where
@@ -212,7 +222,7 @@ withHelper call b handle req@(RequestSimple (RequestBase _ (GithubUserRepo user 
 		go (Right v) = handle req v
 withHelper _ _ _ r = badRequest r
 
-numHelper :: ApiNum v -> (Int -> Handler v) -> Helper
+numHelper :: ApiNum v -> (Int -> Handler v) -> Storer
 numHelper call handle req@(RequestNum (RequestBase _ (GithubUserRepo user repo)) num) =
 	go =<< liftIO (call user repo num)
 	where
@@ -238,6 +248,16 @@ store file req val = do
 
 storeSorted :: Ord a => Show a => FilePath -> Request -> [a] -> Backup ()
 storeSorted file req val = store file req (sort val)
+
+storeAppend :: Read a => Ord a => Show a => FilePath -> Request -> [a] -> Backup ()
+storeAppend file req val = do
+	old <- fromMaybe [] <$> readold
+	storeSorted file req $ S.toList $ S.union
+		(S.fromList val)
+		(S.fromList $ fromMaybe [] $ readish old)
+	where
+		readold = liftIO $ catchMaybeIO $
+			readFileStrict $ storedFile file $ requestRepo req
 
 storedFile :: FilePath -> GithubUserRepo -> FilePath
 storedFile file (GithubUserRepo user repo) = user ++ "_" ++ repo </> file
