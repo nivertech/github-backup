@@ -277,17 +277,16 @@ onGithubBranch r a = bracket prep cleanup (const a)
 			oldbranch <- Git.Branch.current r
 			exists <- Git.Ref.matching (Git.Ref $ "refs/heads/" ++ branchname) r
 			if null exists
-				then Git.Command.run "checkout"
-					[Param "--orphan", Param branchname] r
-				else Git.Command.run "checkout"
-					[Param branchname] r
+				then checkout [Param "--orphan", Param branchname]
+				else checkout [Param branchname]
 			return oldbranch
 		cleanup Nothing = return ()
 		cleanup (Just oldbranch)
 			| name == branchname = return ()
-			| otherwise = Git.Command.run "checkout" [Param name] r
+			| otherwise = checkout [Param name]
 			where
 				name = show $ Git.Ref.base oldbranch
+		checkout params = Git.Command.run "checkout" (Param "-q" : params) r
 		branchname = "github"
 
 commitFiles :: Git.Repo -> [FilePath] -> IO ()
