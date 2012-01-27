@@ -61,6 +61,10 @@ Currently, the GitHub API does not seem to provide a way to access notes
 added to commits and notes added to lines of code. So those notes won't get
 backed up.
 
+The labels that can be added to issues and milestones are not backed up.
+They could be, but don't seem important enough for the extra work involved.
+Yell if you need them.
+
 github-backup re-downloads all issues, comments, and so on
 each time it's run. This may be slow if your repo has a lot of them,
 or even if it just has a lot of forks.
