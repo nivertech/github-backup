@@ -174,8 +174,8 @@ handleForks _ _ [] = return () -- reached an empty page
 handleForks page req fs = do
 	storeAppend "forks" req fs
 	let repo = requestRepo req
-	runRequest (RequestNum (RequestBase "moreforks" repo) (page+1))
 	mapM_ (traverse . toGithubUserRepo) fs
+	runRequest (RequestNum (RequestBase "moreforks" repo) (page+1))
 	where
 		traverse fork = whenM (addFork fork) $
 			gatherMetaData fork
