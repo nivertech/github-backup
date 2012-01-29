@@ -265,7 +265,10 @@ onGithubBranch r a = bracket prep cleanup (const a)
 	where
 		prep = do
 			oldbranch <- Git.Branch.current r
-			exists <- Git.Ref.matching (Git.Ref $ "refs/heads/" ++ branchname) r
+			when (oldbranch == Just branchref) $
+				error $ "it's not currently safe to run github-backup while the " ++
+					branchname ++ " branch is checked out!"
+			exists <- Git.Ref.matching branchref r
 			if null exists
 				then checkout [Param "--orphan", Param branchname]
 				else checkout [Param branchname]
@@ -273,11 +276,12 @@ onGithubBranch r a = bracket prep cleanup (const a)
 		cleanup Nothing = return ()
 		cleanup (Just oldbranch)
 			| name == branchname = return ()
-			| otherwise = checkout [Param name]
+			| otherwise = checkout [Param "--force", Param name]
 			where
 				name = show $ Git.Ref.base oldbranch
 		checkout params = Git.Command.run "checkout" (Param "-q" : params) r
 		branchname = "github"
+		branchref = Git.Ref $ "refs/heads/" ++ branchname
 
 {- Commits all files in the workDir into git, and deletes it. -}
 commitWorkDir :: Backup ()
