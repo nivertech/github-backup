@@ -64,8 +64,8 @@ added to commits and notes added to lines of code. So those notes won't get
 backed up. The GitHub folks have been told about this limitation of their API.
 
 The labels that can be added to issues and milestones are not backed up.
-They could be, but don't seem important enough for the extra work involved.
-Yell if you need them.
+Neither are the hooks. They could be, but don't seem important
+enough for the extra work involved. Yell if you need them.
 
 github-backup re-downloads all issues, comments, and so on
 each time it's run. This may be slow if your repo has a lot of them,
