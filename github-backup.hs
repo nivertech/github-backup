@@ -80,10 +80,14 @@ newtype Backup a = Backup { runBackup :: StateT BackupState IO a }
 inRepo :: (Git.Repo -> IO a) -> Backup a
 inRepo a = liftIO . a =<< gets backupRepo
 
-failedRequest :: Request -> Backup ()
-failedRequest req = do
+failedRequest :: Request -> Github.Error-> Backup ()
+failedRequest req e = unless (ignorable e) $ do
 	set <- gets failedRequests
 	modify $ \s -> s { failedRequests = S.insert req set }
+	where
+		ignorable (Github.JsonError m) =
+			"disabled for this repo" `isInfixOf` m
+		ignorable _ = False
 
 runRequest :: Request -> Backup ()
 runRequest req@(RequestSimple base) = runRequest' base req
@@ -182,7 +186,7 @@ simpleHelper :: ApiCall v -> Handler v -> Helper
 simpleHelper call handle req@(RequestSimple (RequestBase _ (GithubUserRepo user repo))) =
 	go =<< liftIO (call user repo)
 	where
-		go (Left _) = failedRequest req
+		go (Left e) = failedRequest req e
 		go (Right v) = handle req v
 simpleHelper _ _ r = badRequest r
 
@@ -190,7 +194,7 @@ withHelper :: ApiWith v b -> b -> Handler v -> Helper
 withHelper call b handle req@(RequestSimple (RequestBase _ (GithubUserRepo user repo))) =
 	go =<< liftIO (call user repo b)
 	where
-		go (Left _) = failedRequest req
+		go (Left e) = failedRequest req e
 		go (Right v) = handle req v
 withHelper _ _ _ r = badRequest r
 
@@ -198,7 +202,7 @@ numHelper :: ApiNum v -> (Int -> Handler v) -> Helper
 numHelper call handle req@(RequestNum (RequestBase _ (GithubUserRepo user repo)) num) =
 	go =<< liftIO (call user repo num)
 	where
-		go (Left _) = failedRequest req
+		go (Left e) = failedRequest req e
 		go (Right v) = handle num req v
 numHelper _ _ r = badRequest r
 
