@@ -47,6 +47,10 @@ repoUrl :: GithubUserRepo -> String
 repoUrl (GithubUserRepo user remote) =
 	"git://github.com/" ++ user ++ "/" ++ remote ++ ".git"
 
+repoWikiUrl :: GithubUserRepo -> String
+repoWikiUrl (GithubUserRepo user remote) =
+	"git://github.com/" ++ user ++ "/" ++ remote ++ ".wiki.git"
+
 -- A name for a github api call.
 type ApiName = String
 
@@ -130,7 +134,10 @@ lookupApi (RequestBase name _) = fromMaybe bad $ M.lookup name api
 		bad = error $ "internal error: bad api call: " ++ name
 
 userrepoStore :: Storer
-userrepoStore = simpleHelper Github.userRepo $ store "repo"
+userrepoStore = simpleHelper Github.userRepo $ \req r -> do
+	when (Github.repoHasWiki r == Just True) $
+		updateWiki $ toGithubUserRepo r
+	store "repo" req r
 
 watchersStore :: Storer
 watchersStore = simpleHelper Github.watchersFor $ storeSorted "watchers"
@@ -234,7 +241,7 @@ gitHubRemotes :: Backup [GithubUserRepo]
 gitHubRemotes = snd . gitHubPairs <$> gets backupRepo
 
 gitHubPairs :: Git.Repo -> ([Git.Repo], [GithubUserRepo])
-gitHubPairs = unzip . mapMaybe check . Git.Types.remotes
+gitHubPairs = unzip . filter (not . wiki ) . mapMaybe check . Git.Types.remotes
 	where
 		check r@Git.Repo { Git.Types.location = Git.Types.Url u } =
 			headMaybe $ mapMaybe (checkurl r $ show u) gitHubUrlPrefixes
@@ -251,6 +258,7 @@ gitHubPairs = unzip . mapMaybe check . Git.Types.remotes
 		dropdotgit s
 			| ".git" `isSuffixOf` s = take (length s - length ".git") s
 			| otherwise = s
+		wiki (_, GithubUserRepo _ u) = ".wiki" `isSuffixOf` u
 
 {- All known prefixes for urls to github repos. -}
 gitHubUrlPrefixes :: [String]
@@ -297,6 +305,18 @@ commitWorkDir = do
 			[Param "-m", Param "github-backup"] r
 		removeDirectoryRecursive dir
 
+updateWiki :: GithubUserRepo -> Backup ()
+updateWiki fork = do
+	remotes <- Git.remotes <$> gets backupRepo
+	let remote = remoteFor fork
+	when (null $ filter (\r -> Git.remoteName r == Just remote) remotes) $
+		addRemote remote (repoWikiUrl fork)
+	_ <- inRepo $ Git.Command.runBool "fetch" [Param remote]
+	return ()
+	where
+		remoteFor (GithubUserRepo user repo) =
+			"github_" ++ user ++ "_" ++ repo ++ ".wiki"
+
 addFork :: GithubUserRepo -> Backup Bool
 addFork fork = do
 	remotes <- gitHubRemotes
@@ -304,18 +324,22 @@ addFork fork = do
 		then return False
 		else do
 			liftIO $ putStrLn $ "New fork: " ++ repoUrl fork
-			_ <- inRepo $ Git.Command.runBool "remote"
-				[ Param "add"
-				, Param $ remoteFor fork
-				, Param $ repoUrl fork
-				]
-			-- re-read git config to get the added remote
-			r <- inRepo Git.Config.read
-			modify $ \s -> s { backupRepo = r }
+			addRemote (remoteFor fork) (repoUrl fork)
 			return True
 	where
 		remoteFor (GithubUserRepo user repo) =
 			"github_" ++ user ++ "_" ++ repo
+
+addRemote :: String -> String -> Backup ()
+addRemote remotename remoteurl = do
+	_ <- inRepo $ Git.Command.runBool "remote"
+		[ Param "add"
+		, Param remotename
+		, Param remoteurl
+		]
+	-- re-read git config to get the added remote
+	r <- inRepo Git.Config.read
+	modify $ \s -> s { backupRepo = r }
 
 {- Fetches from the github remotes. Done by githb-backup, just because
  - it would be weird for a backup to not fetch all available data.
