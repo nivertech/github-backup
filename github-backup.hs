@@ -308,12 +308,20 @@ commitWorkDir = do
 updateWiki :: GithubUserRepo -> Backup ()
 updateWiki fork = do
 	remotes <- Git.remotes <$> gets backupRepo
-	let remote = remoteFor fork
-	when (null $ filter (\r -> Git.remoteName r == Just remote) remotes) $
-		addRemote remote (repoWikiUrl fork)
-	_ <- inRepo $ Git.Command.runBool "fetch" [Param remote]
-	return ()
+	if (null $ filter (\r -> Git.remoteName r == Just remote) remotes)
+		then do
+			addRemote remote (repoWikiUrl fork)
+			-- github often does not really have a wiki,
+			-- don't bloat config if there is none
+			unlessM (fetchwiki) $
+				removeRemote remote
+			return ()
+		else do
+			_ <- fetchwiki
+			return ()
 	where
+		fetchwiki = inRepo $ Git.Command.runBool "fetch" [Param remote]
+		remote = remoteFor fork
 		remoteFor (GithubUserRepo user repo) =
 			"github_" ++ user ++ "_" ++ repo ++ ".wiki"
 
@@ -325,6 +333,9 @@ addFork fork = do
 		else do
 			liftIO $ putStrLn $ "New fork: " ++ repoUrl fork
 			addRemote (remoteFor fork) (repoUrl fork)
+			-- reread config to get the added fork
+			r <- inRepo Git.Config.read
+			modify $ \s -> s { backupRepo = r }
 			return True
 	where
 		remoteFor (GithubUserRepo user repo) =
@@ -337,9 +348,15 @@ addRemote remotename remoteurl = do
 		, Param remotename
 		, Param remoteurl
 		]
-	-- re-read git config to get the added remote
-	r <- inRepo Git.Config.read
-	modify $ \s -> s { backupRepo = r }
+	return ()
+
+removeRemote :: String -> Backup ()
+removeRemote remotename = do
+	_ <- inRepo $ Git.Command.runBool "remote"
+		[ Param "rm"
+		, Param remotename
+		]
+	return ()
 
 {- Fetches from the github remotes. Done by githb-backup, just because
  - it would be weird for a backup to not fetch all available data.
