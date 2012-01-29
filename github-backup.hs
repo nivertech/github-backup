@@ -223,7 +223,7 @@ store filebase req val = do
 		writeFile file (ppShow val)
 
 workDir :: Backup FilePath
-workDir = (++)
+workDir = (</>)
 		<$> (Git.gitDir <$> gets backupRepo)
 		<*> pure "github-backup.tmp"
 
