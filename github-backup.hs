@@ -14,7 +14,6 @@ import qualified Data.Set as S
 import System.Environment
 import System.IO.Error (try)
 import Control.Exception (bracket)
-import System.Posix.Directory (changeWorkingDirectory)
 import Text.Show.Pretty
 import Control.Monad.State
 import qualified Github.Data.Readable as Github
@@ -404,9 +403,8 @@ getLocalRepo = getArgs >>= make >>= Git.Config.read
 		make (d:[]) = Git.Construct.fromPath d
 		make _ = error usage
 
+newState :: Git.Repo -> BackupState
+newState = BackupState S.empty S.empty
+
 main :: IO ()
-main = do
-	r <- getLocalRepo
-	changeWorkingDirectory $ Git.repoLocation r
-	let backupstate = BackupState S.empty S.empty r
-	evalStateT (runBackup backup) backupstate
+main = evalStateT (runBackup backup) . newState =<< getLocalRepo
