@@ -96,30 +96,29 @@ runRequest' base req = do
 		then return ()
 		else (lookupApi base) req
 
-{- List of Github api calls we can make to store their data. -}
 type Storer = Request -> Backup ()
-api :: M.Map ApiName Storer
-api = M.fromList
-	[ ("userrepo", userrepoStore)
-	, ("forks", forksStore)
-	, ("watchers", watchersStore)
-	, ("pullrequests", pullrequestsStore)
-	, ("pullrequest", pullrequestStore)
-	, ("milestones", milestonesStore)
-	, ("issues", issuesStore)
-	, ("issuecomments", issuecommentsStore)
+data ApiListItem = ApiListItem ApiName Storer Bool
+apiList :: [ApiListItem]
+apiList = 
+	[ ApiListItem "userrepo" userrepoStore True
+	, ApiListItem "watchers" watchersStore True
+	, ApiListItem "pullrequests" pullrequestsStore True
+	, ApiListItem "pullrequest" pullrequestStore False
+	, ApiListItem "milestones" milestonesStore True
+	, ApiListItem "issues" issuesStore True
+	, ApiListItem "issuecomments" issuecommentsStore False
+	-- comes last because it recurses on to the forks
+	, ApiListItem "forks" forksStore True
 	]
 
-{- The toplevel api calls that are followed to get all data. -}
+{- Map of Github api calls we can make to store their data. -}
+api :: M.Map ApiName Storer
+api = M.fromList $ map (\(ApiListItem n s _) -> (n, s)) apiList
+
+{- List of toplevel api calls that are followed to get all data. -}
 toplevelApi :: [ApiName]
-toplevelApi =
-	[ "userrepo"
-	, "watchers"
-	, "pullrequests"
-	, "milestones"
-	, "issues"
-	, "forks" -- comes last because it recurses on to the forks
-	]
+toplevelApi = map (\(ApiListItem n _ _) -> n) $
+	filter (\(ApiListItem _ _ toplevel) -> toplevel) apiList
 
 lookupApi :: RequestBase -> Storer
 lookupApi (RequestBase name _) = fromMaybe bad $ M.lookup name api
