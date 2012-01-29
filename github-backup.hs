@@ -11,11 +11,9 @@ module Main where
 
 import qualified Data.Map as M
 import qualified Data.Set as S
-import Data.Either
 import System.Environment
 import System.IO.Error (try)
 import Control.Exception (bracket)
-import System.Posix.Directory (changeWorkingDirectory)
 import Text.Show.Pretty
 import Control.Monad.State
 import qualified Github.Data.Readable as Github
@@ -35,7 +33,6 @@ import qualified Git.Types
 import qualified Git.Command
 import qualified Git.Ref
 import qualified Git.Branch
-import qualified Git.Queue
 
 -- A github user and repo.
 data GithubUserRepo = GithubUserRepo String String
@@ -64,10 +61,9 @@ requestRepo :: Request -> GithubUserRepo
 requestRepo (RequestSimple (RequestBase _ repo)) = repo
 requestRepo (RequestNum (RequestBase _ repo) _) = repo
 
-type BackupMap = M.Map Request (Either Github.Error [FilePath])
-
 data BackupState = BackupState
-	{ backupDone :: BackupMap
+	{ failedRequests :: S.Set Request
+	, retriedRequests :: S.Set Request
 	, backupRepo :: Git.Repo
 	}
 
@@ -84,34 +80,21 @@ newtype Backup a = Backup { runBackup :: StateT BackupState IO a }
 inRepo :: (Git.Repo -> IO a) -> Backup a
 inRepo a = liftIO . a =<< gets backupRepo
 
-changeDone :: (BackupMap -> BackupMap) -> Backup ()
-changeDone a = do
-	done <- gets backupDone
-	modify $ \s -> s { backupDone = a done }
+failedRequest :: Request -> Backup ()
+failedRequest req = do
+	set <- gets failedRequests
+	modify $ \s -> s { failedRequests = S.insert req set }
 
-backupFiles :: [(Request, Either Github.Error [FilePath])] -> [FilePath]
-backupFiles = concat . rights . map snd
-
-backupFails :: [(Request, Either Github.Error [FilePath])] -> [Request]
-backupFails = map fst . filter failed
-	where
-		failed (_, Left _) = True
-		failed _ = False
-
-failedRequest :: Request -> Github.Error -> Backup ()
-failedRequest req e = changeDone $ M.insert req $ Left e
-
-{- A given request in only run once. This is to avoid retries and other
- - loops. -}
 runRequest :: Request -> Backup ()
 runRequest req@(RequestSimple base) = runRequest' base req
 runRequest req@(RequestNum base _) = runRequest' base req
 runRequest' :: RequestBase -> Request -> Backup ()
 runRequest' base req = do
-	done <- gets backupDone
-	case M.lookup req done of
-		Nothing -> (lookupApi base) req
-		_ -> return ()
+	-- avoid re-running requests that were already retried
+	retried <- gets retriedRequests
+	if S.member req retried
+		then return ()
+		else (lookupApi base) req
 
 {- List of Github api calls we can make to store their data. -}
 type Storer = Request -> Backup ()
@@ -194,8 +177,7 @@ handleForks page req fs = do
 	runRequest (RequestNum (RequestBase "moreforks" repo) (page+1))
 	mapM_ (traverse . toGithubUserRepo) fs
 	where
-		traverse fork = do
-			addFork fork
+		traverse fork = whenM (addFork fork) $
 			gatherMetaData fork
 
 forValues :: (Request -> v -> Backup ()) -> Request -> [v] -> Backup ()
@@ -210,7 +192,7 @@ simpleHelper :: ApiCall v -> Handler v -> Storer
 simpleHelper call handle req@(RequestSimple (RequestBase _ (GithubUserRepo user repo))) =
 	go =<< liftIO (call user repo)
 	where
-		go (Left e) = failedRequest req e
+		go (Left _) = failedRequest req
 		go (Right v) = handle req v
 simpleHelper _ _ r = badRequest r
 
@@ -218,7 +200,7 @@ withHelper :: ApiWith v b -> b -> Handler v -> Storer
 withHelper call b handle req@(RequestSimple (RequestBase _ (GithubUserRepo user repo))) =
 	go =<< liftIO (call user repo b)
 	where
-		go (Left e) = failedRequest req e
+		go (Left _) = failedRequest req
 		go (Right v) = handle req v
 withHelper _ _ _ r = badRequest r
 
@@ -226,7 +208,7 @@ numHelper :: ApiNum v -> (Int -> Handler v) -> Storer
 numHelper call handle req@(RequestNum (RequestBase _ (GithubUserRepo user repo)) num) =
 	go =<< liftIO (call user repo num)
 	where
-		go (Left e) = failedRequest req e
+		go (Left _) = failedRequest req
 		go (Right v) = handle num req v
 numHelper _ _ r = badRequest r
 
@@ -234,33 +216,34 @@ badRequest :: Request -> a
 badRequest r = error $ "internal error: bad request type " ++ show r
 
 store :: Show a => FilePath -> Request -> a -> Backup ()
-store file req val = do
-	let f = storedFile file $ requestRepo req
+store filebase req val = do
+	file <- storedFile filebase (requestRepo req)
 	liftIO $ do
-		createDirectoryIfMissing True (parentDir f)
-		writeFile f (ppShow val)
-	changeDone $ M.insertWith comb req (Right [f])
-	where
-		comb (Right a) (Right b) = Right $ a ++ b
-		comb (Right a) _ = Right a
-		comb _ (Right b) = Right b
-		comb (Left e) _ = Left e
+		createDirectoryIfMissing True (parentDir file)
+		writeFile file (ppShow val)
+
+workDir :: Backup FilePath
+workDir = (++)
+		<$> (Git.gitDir <$> gets backupRepo)
+		<*> pure "github-backup.tmp"
 
 storeSorted :: Ord a => Show a => FilePath -> Request -> [a] -> Backup ()
-storeSorted file req val = store file req (sort val)
+storeSorted filebase req val = store filebase req (sort val)
 
 storeAppend :: Read a => Ord a => Show a => FilePath -> Request -> [a] -> Backup ()
-storeAppend file req val = do
-	old <- fromMaybe [] <$> readold
-	storeSorted file req $ S.toList $ S.union
+storeAppend filebase req val = do
+	old <- readold =<< storedFile filebase (requestRepo req)
+	storeSorted filebase req $ S.toList $ S.union
 		(S.fromList val)
 		(S.fromList $ fromMaybe [] $ readish old)
 	where
-		readold = liftIO $ catchMaybeIO $
-			readFileStrict $ storedFile file $ requestRepo req
+		readold = fromMaybe [] <$>
+			liftIO . catchMaybeIO . readFileStrict
 
-storedFile :: FilePath -> GithubUserRepo -> FilePath
-storedFile file (GithubUserRepo user repo) = user ++ "_" ++ repo </> file
+storedFile :: FilePath -> GithubUserRepo -> Backup FilePath
+storedFile file (GithubUserRepo user repo) = do
+	top <- workDir
+	return $ top </> user ++ "_" ++ repo </> file
 
 gitHubRepos :: Backup [Git.Repo]
 gitHubRepos = fst . gitHubPairs <$> gets backupRepo
@@ -302,7 +285,10 @@ onGithubBranch r a = bracket prep cleanup (const a)
 	where
 		prep = do
 			oldbranch <- Git.Branch.current r
-			exists <- Git.Ref.matching (Git.Ref $ "refs/heads/" ++ branchname) r
+			when (oldbranch == Just branchref) $
+				error $ "it's not currently safe to run github-backup while the " ++
+					branchname ++ " branch is checked out!"
+			exists <- Git.Ref.matching branchref r
 			if null exists
 				then checkout [Param "--orphan", Param branchname]
 				else checkout [Param branchname]
@@ -310,37 +296,41 @@ onGithubBranch r a = bracket prep cleanup (const a)
 		cleanup Nothing = return ()
 		cleanup (Just oldbranch)
 			| name == branchname = return ()
-			| otherwise = checkout [Param name]
+			| otherwise = checkout [Param "--force", Param name]
 			where
 				name = show $ Git.Ref.base oldbranch
 		checkout params = Git.Command.run "checkout" (Param "-q" : params) r
 		branchname = "github"
+		branchref = Git.Ref $ "refs/heads/" ++ branchname
 
-commitFiles :: [FilePath] -> Git.Repo -> IO ()
-commitFiles [] _ = return ()
-commitFiles files r = do
-	mass "add" [Param "-f"]
-	_ <- catchMaybeIO $ mass "commit" [Param "-m", Param "github-backup"]
-	return ()
-	where
-		mass subcommand params = do
-			let q = Git.Queue.add Git.Queue.new subcommand params files
-			_ <- Git.Queue.flush q r
-			return ()
+{- Commits all files in the workDir into git, and deletes it. -}
+commitWorkDir :: Backup ()
+commitWorkDir = do
+	dir <- workDir
+	r <- gets backupRepo
+	liftIO $ whenM (doesDirectoryExist dir) $ onGithubBranch r $ do
+		_ <- boolSystem "git"
+			[Param "--work-tree", File dir, Param "add", Param "."]
+		Git.Command.run "commit"
+			[Param "-m", Param "github-backup"] r
+		removeDirectoryRecursive dir
 
-addFork :: GithubUserRepo -> Backup ()
+addFork :: GithubUserRepo -> Backup Bool
 addFork fork = do
 	remotes <- gitHubRemotes
-	unless (fork `elem` remotes) $ do
-		liftIO $ putStrLn $ "New fork: " ++ repoUrl fork
-		_ <- inRepo $ Git.Command.runBool "remote"
-			[ Param "add"
-			, Param $ remoteFor fork
-			, Param $ repoUrl fork
-			]
-		-- re-read git config to get the added remote
-		r <- inRepo Git.Config.read
-		modify $ \s -> s { backupRepo = r }
+	if (fork `elem` remotes)
+		then return False
+		else do
+			liftIO $ putStrLn $ "New fork: " ++ repoUrl fork
+			_ <- inRepo $ Git.Command.runBool "remote"
+				[ Param "add"
+				, Param $ remoteFor fork
+				, Param $ repoUrl fork
+				]
+			-- re-read git config to get the added remote
+			r <- inRepo Git.Config.read
+			modify $ \s -> s { backupRepo = r }
+			return True
 	where
 		remoteFor (GithubUserRepo user repo) =
 			"github_" ++ user ++ "_" ++ repo
@@ -383,7 +373,7 @@ loadRetry r = do
 retryFile :: Git.Repo -> FilePath
 retryFile r = Git.gitDir r </> "github-backup.todo"
 
-retry :: Backup BackupMap
+retry :: Backup (S.Set Request)
 retry = do
 	todo <- inRepo $ loadRetry
 	unless (null todo) $ do
@@ -391,33 +381,37 @@ retry = do
 			"Retrying " ++ show (length todo) ++
 			" requests that failed last time..."
 		mapM_ runRequest todo
-	gets backupDone
+	retriedfailed <- gets failedRequests
+	modify $ \s -> s
+		{ failedRequests = S.empty
+		, retriedRequests = S.fromList todo
+		}
+	return retriedfailed
 
 backup :: Backup ()
 backup = do
+	retriedfailed <- retry
 	remotes <- gitHubRemotes
 	when (null remotes) $ do
 		error "no github remotes found"
-	retried <- retry
 	mapM_ gatherMetaData remotes
 	fetchRepos
-	save retried
+	save retriedfailed
 
-{- Save all backup data. Files that were written are committed.
+{- Save all backup data. Files that were written to the workDir are committed.
  - Requests that failed are saved for next time. Requests that were retried
  - this time and failed are ordered last, to ensure that we don't get stuck
  - retrying the same requests and not making progress when run again.
  -}
-save :: BackupMap -> Backup ()
-save retried = do
-	done <- gets backupDone
-	let ordered = M.toList (done `M.difference` retried) ++ M.toList retried
-	inRepo $ commitFiles $ backupFiles ordered
-	let fails = backupFails ordered
-	inRepo $ storeRetry fails
-	unless (null fails) $ do
+save :: S.Set Request -> Backup ()
+save retriedfailed = do
+	commitWorkDir
+	failed <- gets failedRequests
+	let toretry = S.toList failed ++ S.toList retriedfailed
+	inRepo $ storeRetry toretry
+	unless (null toretry) $ do
 		error $ "Backup may be incomplete; " ++
-			show (length fails) ++
+			show (length toretry) ++
 			" requests failed. Run again later."
 
 usage :: String
@@ -430,9 +424,8 @@ getLocalRepo = getArgs >>= make >>= Git.Config.read
 		make (d:[]) = Git.Construct.fromPath d
 		make _ = error usage
 
+newState :: Git.Repo -> BackupState
+newState = BackupState S.empty S.empty
+
 main :: IO ()
-main = do
-	r <- getLocalRepo
-	changeWorkingDirectory $ Git.repoLocation r
-	let backupstate = BackupState M.empty r
-	onGithubBranch r $ evalStateT (runBackup backup) backupstate
+main = evalStateT (runBackup backup) . newState =<< getLocalRepo
