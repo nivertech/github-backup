@@ -237,8 +237,7 @@ storeAppend filebase req val = do
 		(S.fromList val)
 		(S.fromList $ fromMaybe [] $ readish old)
 	where
-		readold = fromMaybe [] <$>
-			liftIO . catchMaybeIO . readFileStrict
+		readold f = liftIO $ catchDefaultIO (readFileStrict f) []
 
 storedFile :: FilePath -> GithubUserRepo -> Backup FilePath
 storedFile file (GithubUserRepo user repo) = do
