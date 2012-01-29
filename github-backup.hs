@@ -216,7 +216,7 @@ store filebase req val = do
 			workdir </> user ++ "_" ++ repo </> filebase
 
 workDir :: Backup FilePath
-workDir = (++)
+workDir = (</>)
 		<$> (Git.gitDir <$> gets backupRepo)
 		<*> pure "github-backup.tmp"
 
