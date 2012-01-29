@@ -222,7 +222,7 @@ store filebase req val = do
 		writeFile file (ppShow val)
 
 workDir :: Backup FilePath
-workDir = (++)
+workDir = (</>)
 		<$> (Git.gitDir <$> gets backupRepo)
 		<*> pure "github-backup.tmp"
 
@@ -236,8 +236,7 @@ storeAppend filebase req val = do
 		(S.fromList val)
 		(S.fromList $ fromMaybe [] $ readish old)
 	where
-		readold = fromMaybe [] <$>
-			liftIO . catchMaybeIO . readFileStrict
+		readold f = liftIO $ catchDefaultIO (readFileStrict f) []
 
 storedFile :: FilePath -> GithubUserRepo -> Backup FilePath
 storedFile file (GithubUserRepo user repo) = do
