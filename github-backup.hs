@@ -330,10 +330,9 @@ updateWiki fork = do
 	remotes <- Git.remotes <$> gets backupRepo
 	if (null $ filter (\r -> Git.remoteName r == Just remote) remotes)
 		then do
-			addRemote remote (repoWikiUrl fork)
 			-- github often does not really have a wiki,
 			-- don't bloat config if there is none
-			unlessM (fetchwiki) $
+			unlessM (addRemote remote $ repoWikiUrl fork) $ do
 				removeRemote remote
 			return ()
 		else do
@@ -352,23 +351,21 @@ addFork fork = do
 		then return False
 		else do
 			liftIO $ putStrLn $ "New fork: " ++ repoUrl fork
-			addRemote (remoteFor fork) (repoUrl fork)
-			-- reread config to get the added fork
-			r <- inRepo Git.Config.read
-			modify $ \s -> s { backupRepo = r }
+			_ <- addRemote (remoteFor fork) (repoUrl fork)
 			return True
 	where
 		remoteFor (GithubUserRepo user repo) =
 			"github_" ++ user ++ "_" ++ repo
 
-addRemote :: String -> String -> Backup ()
-addRemote remotename remoteurl = do
-	_ <- inRepo $ Git.Command.runBool "remote"
+{- Adds a remote, also fetching from it. -}
+addRemote :: String -> String -> Backup Bool
+addRemote remotename remoteurl =
+	inRepo $ Git.Command.runBool "remote"
 		[ Param "add"
+		, Param "-f"
 		, Param remotename
 		, Param remoteurl
 		]
-	return ()
 
 removeRemote :: String -> Backup ()
 removeRemote remotename = do
@@ -378,7 +375,7 @@ removeRemote remotename = do
 		]
 	return ()
 
-{- Fetches from the github remotes. Done by githb-backup, just because
+{- Fetches from the github remotes. Done by github-backup, just because
  - it would be weird for a backup to not fetch all available data.
  - Even though its real focus is on metadata not stored in git. -}
 fetchRepos :: Backup ()
@@ -437,8 +434,8 @@ backup = do
 	remotes <- gitHubRemotes
 	when (null remotes) $ do
 		error "no github remotes found"
-	mapM_ gatherMetaData remotes
 	fetchRepos
+	mapM_ gatherMetaData remotes
 	save retriedfailed
 
 {- Save all backup data. Files that were written to the workDir are committed.
