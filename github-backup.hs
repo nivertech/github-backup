@@ -235,13 +235,13 @@ storeSorted :: Ord a => Show a => FilePath -> Request -> [a] -> Backup ()
 storeSorted file req val = store file req (sort val)
 
 gitHubRepos :: Backup [Git.Repo]
-gitHubRepos = fst . gitHubPairs <$> gets backupRepo
+gitHubRepos = fst . unzip . gitHubPairs <$> gets backupRepo
 
 gitHubRemotes :: Backup [GithubUserRepo]
-gitHubRemotes = snd . gitHubPairs <$> gets backupRepo
+gitHubRemotes = snd . unzip . gitHubPairs <$> gets backupRepo
 
-gitHubPairs :: Git.Repo -> ([Git.Repo], [GithubUserRepo])
-gitHubPairs = unzip . filter (not . wiki ) . mapMaybe check . Git.Types.remotes
+gitHubPairs :: Git.Repo -> [(Git.Repo, GithubUserRepo)]
+gitHubPairs = filter (not . wiki ) . mapMaybe check . Git.Types.remotes
 	where
 		check r@Git.Repo { Git.Types.location = Git.Types.Url u } =
 			headMaybe $ mapMaybe (checkurl r $ show u) gitHubUrlPrefixes
@@ -355,15 +355,13 @@ removeRemote remotename = do
 		]
 	return ()
 
-{- Fetches from the github remotes. Done by github-backup, just because
+{- Fetches from the github remote. Done by github-backup, just because
  - it would be weird for a backup to not fetch all available data.
  - Even though its real focus is on metadata not stored in git. -}
-fetchRepos :: Backup ()
-fetchRepos = do
-	repos <- gitHubRepos
-	forM_ repos $ \repo -> inRepo $
-		Git.Command.runBool "fetch"
-			[Param $ fromJust $ Git.Types.remoteName repo]
+fetchRepo :: Git.Repo -> Backup Bool
+fetchRepo repo = inRepo $
+	Git.Command.runBool "fetch"
+		[Param $ fromJust $ Git.Types.remoteName repo]
 
 {- Gathers metadata for the repo. Retuns a list of files written
  - and a list that may contain requests that need to be retried later. -}
@@ -411,11 +409,12 @@ retry = do
 backup :: Backup ()
 backup = do
 	retriedfailed <- retry
-	remotes <- gitHubRemotes
+	remotes <- gitHubPairs <$> gets backupRepo
 	when (null remotes) $ do
 		error "no github remotes found"
-	fetchRepos
-	mapM_ gatherMetaData remotes
+	forM_ remotes $ \(repo, remote) -> do
+		_ <- fetchRepo repo
+		gatherMetaData remote
 	save retriedfailed
 
 {- Save all backup data. Files that were written to the workDir are committed.
