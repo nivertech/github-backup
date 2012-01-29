@@ -13,7 +13,7 @@ Or use cabal:
 
     cabal install github-backup --bindir=$HOME/bin
 
-## Why backup GitHub
+## Why backup GitHub repositories
 
 There are a couple of reasons to want to back this stuff up:
 
@@ -30,7 +30,7 @@ Each time you run github-backup, it will find any new forks of your project
 on GitHub. It will add remotes to your repository for the forks, using names
 like `github_linus_divemonitor`. It will fetch from every fork.
 
-Then the next pass will download metadata from each fork. This is stored
+It downloads metadata from each fork. This is stored
 into a branch named "github". Each fork gets a directory in there,
 like `linus_divemonitor`. Inside the directory there will be some
 files, like `linus_divemonitor/watchers`. There may be further
@@ -46,7 +46,9 @@ serialized data types. This is plain text, and readable, if you squint.
 
 github-backup is repository-focused. It does not try to back up other
 information from GitHub. In particular, social network stuff, like
-users who are following you, is not backed up.
+users who are following you, is not backed up. And it only backs up
+the repository you run it in, not any other repositories you might have
+on GitHub. Although it might learn to do that later..
 
 github-backup will find and backup forks of a repository, and all forks
 of those forks, etc. However, it cannot go *up* the fork tree. So if
@@ -59,7 +61,7 @@ the haskell github library I'm using. Hope to get it fixed soon.
 
 Currently, the GitHub API does not seem to provide a way to access notes
 added to commits and notes added to lines of code. So those notes won't get
-backed up.
+backed up. The GitHub folks have been told about this limitation of their API.
 
 The labels that can be added to issues and milestones are not backed up.
 They could be, but don't seem important enough for the extra work involved.
