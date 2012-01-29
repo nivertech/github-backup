@@ -301,8 +301,9 @@ commitWorkDir = do
 	liftIO $ whenM (doesDirectoryExist dir) $ onGithubBranch r $ do
 		_ <- boolSystem "git"
 			[Param "--work-tree", File dir, Param "add", Param "."]
-		Git.Command.run "commit"
-			[Param "-m", Param "github-backup"] r
+		_ <- boolSystem "git"
+			[Param "--work-tree", File dir, Param "commit",
+			 Param "-a", Param "-m", Param "github-backup"]
 		removeDirectoryRecursive dir
 
 updateWiki :: GithubUserRepo -> Backup ()
