@@ -192,26 +192,17 @@ type Helper = Request -> Backup ()
 
 simpleHelper :: ApiCall v -> Handler v -> Helper
 simpleHelper call handle req@(RequestSimple (RequestBase _ (GithubUserRepo user repo))) =
-	go =<< liftIO (call user repo)
-	where
-		go (Left e) = failedRequest req e
-		go (Right v) = handle req v
+	either (failedRequest req) (handle req) =<< liftIO (call user repo)
 simpleHelper _ _ r = badRequest r
 
 withHelper :: ApiWith v b -> b -> Handler v -> Helper
 withHelper call b handle req@(RequestSimple (RequestBase _ (GithubUserRepo user repo))) =
-	go =<< liftIO (call user repo b)
-	where
-		go (Left e) = failedRequest req e
-		go (Right v) = handle req v
+	either (failedRequest req) (handle req) =<< liftIO (call user repo b)
 withHelper _ _ _ r = badRequest r
 
 numHelper :: ApiNum v -> (Int -> Handler v) -> Helper
 numHelper call handle req@(RequestNum (RequestBase _ (GithubUserRepo user repo)) num) =
-	go =<< liftIO (call user repo num)
-	where
-		go (Left e) = failedRequest req e
-		go (Right v) = handle num req v
+	either (failedRequest req) (handle num req) =<< liftIO (call user repo num)
 numHelper _ _ r = badRequest r
 
 badRequest :: Request -> a
@@ -408,17 +399,6 @@ retry = do
 		}
 	return retriedfailed
 
-backup :: Backup ()
-backup = do
-	retriedfailed <- retry
-	remotes <- gitHubPairs <$> getState backupRepo
-	when (null remotes) $ do
-		error "no github remotes found"
-	forM_ remotes $ \(repo, remote) -> do
-		_ <- fetchRepo repo
-		gatherMetaData remote
-	save retriedfailed
-
 {- Save all backup data. Files that were written to the workDir are committed.
  - Requests that failed are saved for next time. Requests that were retried
  - this time and failed are ordered last, to ensure that we don't get stuck
@@ -435,18 +415,49 @@ save retriedfailed = do
 			show (length toretry) ++
 			" requests failed. Run again later."
 
-usage :: String
-usage = "usage: github-backup [directory]"
-
-getLocalRepo :: IO Git.Repo
-getLocalRepo = getArgs >>= make >>= Git.Config.read
-	where
-		make [] = Git.Construct.fromCwd
-		make (d:[]) = Git.Construct.fromPath d
-		make _ = error usage
-
 newState :: Git.Repo -> BackupState
 newState = BackupState S.empty S.empty
 
+backup :: Git.Repo -> IO ()
+backup repo = evalStateT (runBackup go) . newState =<< Git.Config.read repo
+	where
+		go = do
+			retriedfailed <- retry
+			remotes <- gitHubPairs <$> getState backupRepo
+			when (null remotes) $ do
+				error "no github remotes found"
+			forM_ remotes $ \(r, remote) -> do
+				_ <- fetchRepo r
+				gatherMetaData remote
+			save retriedfailed
+
+backupUser :: String -> IO ()
+backupUser username = do
+	repos <- either (error . show) id <$>
+		Github.userRepos username Github.All
+	when (null repos) $
+		error $ "No GitHub repositories found for user " ++ username
+	status <- forM repos $ \repo -> do
+		let dir = Github.repoName repo
+		unlessM (doesDirectoryExist dir) $ do
+			putStrLn $ "New repository: " ++ dir
+			ok <- boolSystem "git"
+				[ Param "clone"
+				, Param (Github.repoGitUrl repo)
+				, Param dir
+				]
+			unless ok $ error "clone failed"
+		isJust <$> catchMaybeIO
+			(backup =<< Git.Construct.fromPath dir)
+	unless (all (== True) status) $
+		error "Failed to successfully back everything up. Run again later."
+
+usage :: String
+usage = "usage: github-backup [username]"
+
 main :: IO ()
-main = evalStateT (runBackup backup) . newState =<< getLocalRepo
+main = getArgs >>= go
+	where
+		go [] = backup =<< Git.Construct.fromCwd
+		go (username:[]) = backupUser username
+		go _= error usage
