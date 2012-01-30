@@ -101,9 +101,8 @@ runRequest' :: RequestBase -> Request -> Backup ()
 runRequest' base req = do
 	-- avoid re-running requests that were already retried
 	retried <- getState retriedRequests
-	if S.member req retried
-		then return ()
-		else (lookupApi base) req
+	unless (S.member req retried) $
+		(lookupApi base) req
 
 type Storer = Request -> Backup ()
 data ApiListItem = ApiListItem ApiName Storer Bool
@@ -240,7 +239,7 @@ gitHubPairs = filter (not . wiki ) . mapMaybe check . Git.Types.remotes
 		check _ = Nothing
 		checkurl r u prefix
 			| prefix `isPrefixOf` u && length bits == 2 =
-				Just $ (r,
+				Just (r,
 					GithubUserRepo (bits !! 0)
 						(dropdotgit $ bits !! 1))
 			| otherwise = Nothing
@@ -301,15 +300,15 @@ commitWorkDir = do
 updateWiki :: GithubUserRepo -> Backup ()
 updateWiki fork = do
 	remotes <- Git.remotes <$> getState backupRepo
-	if (null $ filter (\r -> Git.remoteName r == Just remote) remotes)
+	if any (\r -> Git.remoteName r == Just remote) remotes
 		then do
-			-- github often does not really have a wiki,
-			-- don't bloat config if there is none
-			unlessM (addRemote remote $ repoWikiUrl fork) $ do
-				removeRemote remote
+			_ <- fetchwiki
 			return ()
 		else do
-			_ <- fetchwiki
+			-- github often does not really have a wiki,
+			-- don't bloat config if there is none
+			unlessM (addRemote remote $ repoWikiUrl fork) $
+				removeRemote remote
 			return ()
 	where
 		fetchwiki = inRepo $ Git.Command.runBool "fetch" [Param remote]
@@ -320,7 +319,7 @@ updateWiki fork = do
 addFork :: GithubUserRepo -> Backup Bool
 addFork fork = do
 	remotes <- gitHubRemotes
-	if (fork `elem` remotes)
+	if fork `elem` remotes
 		then return False
 		else do
 			liftIO $ putStrLn $ "New fork: " ++ repoUrl fork
@@ -373,20 +372,15 @@ storeRetry [] r = do
 storeRetry retryrequests r = writeFile (retryFile r) (show retryrequests)
 
 loadRetry :: Git.Repo -> IO [Request]
-loadRetry r = do
-	c <- catchMaybeIO (readFileStrict (retryFile r))
-	case c of
-		Nothing -> return []
-		Just s -> case readish s of
-			Nothing -> return []
-			Just v -> return v
+loadRetry r = maybe [] (fromMaybe [] . readish)
+	<$> catchMaybeIO (readFileStrict (retryFile r))
 
 retryFile :: Git.Repo -> FilePath
 retryFile r = Git.gitDir r </> "github-backup.todo"
 
 retry :: Backup (S.Set Request)
 retry = do
-	todo <- inRepo $ loadRetry
+	todo <- inRepo loadRetry
 	unless (null todo) $ do
 		liftIO $ putStrLn $
 			"Retrying " ++ show (length todo) ++
@@ -410,7 +404,7 @@ save retriedfailed = do
 	failed <- getState failedRequests
 	let toretry = S.toList failed ++ S.toList retriedfailed
 	inRepo $ storeRetry toretry
-	unless (null toretry) $ do
+	unless (null toretry) $
 		error $ "Backup may be incomplete; " ++
 			show (length toretry) ++
 			" requests failed. Run again later."
@@ -424,7 +418,7 @@ backup repo = evalStateT (runBackup go) . newState =<< Git.Config.read repo
 		go = do
 			retriedfailed <- retry
 			remotes <- gitHubPairs <$> getState backupRepo
-			when (null remotes) $ do
+			when (null remotes) $
 				error "no github remotes found"
 			forM_ remotes $ \(r, remote) -> do
 				_ <- fetchRepo r
