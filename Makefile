@@ -1,6 +1,7 @@
 BASEFLAGS=-Wall -fno-warn-orphans
 GHCFLAGS=-O2 $(BASEFLAGS)
 bins=github-backup
+mans=github-backup.1
 all=$(bins)
 
 ifdef PROFILE
@@ -22,6 +23,12 @@ fast: $(bins)
 
 $(bins):
 	$(GHCMAKE) $@
+
+install: all
+	install -d $(DESTDIR)$(PREFIX)/bin
+	install $(bins) $(DESTDIR)$(PREFIX)/bin
+	install -d $(DESTDIR)$(PREFIX)/share/man/man1
+	install -m 0644 $(mans) $(DESTDIR)$(PREFIX)/share/man/man1
 
 clean:
 	rm -f $(bins)

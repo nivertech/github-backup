@@ -1,0 +1,25 @@
+Source: github-backup
+Section: utils
+Priority: optional
+Build-Depends: 
+	debhelper (>= 9),
+	ghc,
+	libghc-github-dev,
+	libghc-missingh-dev,
+	libghc-hslogger-dev,
+	libghc-pretty-show-dev,
+	libghc-ifelse-dev,
+Maintainer: Joey Hess <joeyh@debian.org>
+Standards-Version: 3.9.2
+Vcs-Git: git://github.com/joeyh/github-backup.git
+Homepage: http://guthub.com/joeyh/github-backup
+
+Package: github-backup
+Architecture: any
+Section: utils
+Depends: ${misc:Depends}, ${shlibs:Depends}
+Description: backs up data from GitHub
+ github-backup is a simple tool you run in a git repository you cloned from
+ GitHub. It backs up everything GitHub publishes about the repository,
+ including other forks, issues, comments, wikis, milestones, pull requests,
+ and watchers.
