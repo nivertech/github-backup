@@ -15,7 +15,7 @@ import System.Environment
 import System.IO.Error (try)
 import Control.Exception (bracket)
 import Text.Show.Pretty
-import Control.Monad.State
+import Control.Monad.State.Strict
 import qualified Github.Data.Readable as Github
 import qualified Github.Repos as Github
 import qualified Github.Repos.Forks as Github
@@ -26,6 +26,7 @@ import qualified Github.Issues.Comments
 import qualified Github.Issues.Milestones
 
 import Common
+import Utility.State
 import qualified Git
 import qualified Git.Construct
 import qualified Git.Config
@@ -87,7 +88,7 @@ inRepo a = liftIO . a =<< gets backupRepo
 failedRequest :: Request -> Github.Error-> Backup ()
 failedRequest req e = unless (ignorable e) $ do
 	set <- gets failedRequests
-	modify $ \s -> s { failedRequests = S.insert req set }
+	changeState $ \s -> s { failedRequests = S.insert req set }
 	where
 		ignorable (Github.JsonError m) =
 			"disabled for this repo" `isInfixOf` m
@@ -401,7 +402,7 @@ retry = do
 			" requests that failed last time..."
 		mapM_ runRequest todo
 	retriedfailed <- gets failedRequests
-	modify $ \s -> s
+	changeState $ \s -> s
 		{ failedRequests = S.empty
 		, retriedRequests = S.fromList todo
 		}
