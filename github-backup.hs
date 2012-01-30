@@ -289,11 +289,13 @@ commitWorkDir :: Backup ()
 commitWorkDir = do
 	dir <- workDir
 	r <- getState backupRepo
+	let git_false_worktree ps = boolSystem "git" $
+		[ Param ("--work-tree=" ++ dir)
+		, Param ("--git-dir=" ++ Git.gitDir r)
+		] ++ ps
 	liftIO $ whenM (doesDirectoryExist dir) $ onGithubBranch r $ do
-		_ <- boolSystem "git"
-			[Param "--work-tree", File dir, Param "add", Param "."]
-		_ <- boolSystem "git"
-			[Param "--work-tree", File dir, Param "commit",
+		_ <- git_false_worktree [ Param "add", Param "." ]
+		_ <- git_false_worktree [ Param "commit",
 			 Param "-a", Param "-m", Param "github-backup"]
 		removeDirectoryRecursive dir
 
