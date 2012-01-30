@@ -19,3 +19,8 @@ changeState :: MonadState s m => (s -> s) -> m ()
 changeState f = do
 	x <- get
 	put $! f x
+
+{- Gets a value from the internal state, selected by the passed value
+ - constructor. -}
+getState :: MonadState s m => (s -> a) -> m a
+getState = gets
