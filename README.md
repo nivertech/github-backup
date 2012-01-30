@@ -8,11 +8,18 @@ and watchers.
     git clone git://github.com/joeyh/github-backup
     cd github-backup
     make
-    ./github-backup
 
 Or use cabal:
 
     cabal install github-backup --bindir=$HOME/bin
+
+## Use
+
+  Run `github-backup` with no parameters, inside a git repository cloned
+  from GitHub to back up that repository.
+
+  Or, run `github-backup username` to clone and back up all of a GitHub
+  user's repositories.
 
 ## Why backup GitHub repositories
 
@@ -27,9 +34,9 @@ There are a couple of reasons to want to back this stuff up:
 
 ## What to expect
 
-Each time you run github-backup, it will find any new forks of your project
-on GitHub. It will add remotes to your repository for the forks, using names
-like `github_linus_divemonitor`. It will fetch from every fork.
+Each time you run github-backup, it will find any new forks on GitHub. It
+will add remotes to your repository for the forks, using names like
+`github_linus_divemonitor`. It will fetch from every fork.
 
 It downloads metadata from each fork. This is stored
 into a branch named "github". Each fork gets a directory in there,
@@ -47,9 +54,7 @@ serialized data types. This is plain text, and readable, if you squint.
 
 github-backup is repository-focused. It does not try to back up other
 information from GitHub. In particular, social network stuff, like
-users who are following you, is not backed up. And it only backs up
-the repository you run it in, not any other repositories you might have
-on GitHub. Although it might learn to do that later..
+users who are following you, is not backed up.
 
 github-backup will find and backup forks of a repository, and all forks
 of those forks, etc. However, it cannot go *up* the fork tree. So if
