@@ -8,11 +8,12 @@ Stability: Stable
 Copyright: 2012 Joey Hess
 License-File: GPL
 Build-Type: Simple
-Extra-Source-Files: README.md Makefile Git/Construct.hs Git/Command.hs
- Git/Branch.hs Git/Url.hs Git/Ref.hs Git/Sha.hs Git/Types.hs
- Git/Config.hs Git/Queue.hs Utility/Misc.hs Common.hs
- Utility/TempFile.hs Utility/Monad.hs Utility/PartialPrelude.hs
- Utility/Path.hs Utility/Directory.hs Utility/SafeCommand.hs Git.hs
+Extra-Source-Files: README.md Makefile git-annex.1
+ Common.hs github-backup.hs Git/Url.hs Git/Types.hs Git/Queue.hs Git/Ref.hs
+ Git/Branch.hs Git/Sha.hs Git/Config.hs Git/Command.hs Git/Construct.hs
+ Setup.hs Github/Data/Readable.hs Utility/Path.hs Utility/TempFile.hs
+ Utility/State.hs Utility/Monad.hs Utility/Misc.hs Utility/SafeCommand.hs
+ Utility/Directory.hs Utility/PartialPrelude.hs Git.hs
 Homepage: https://github.com/joeyh/github-backup
 Category: Utility
 Synopsis: backs up everything github knows about a repository, to the repository
