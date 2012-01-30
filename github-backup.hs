@@ -11,9 +11,9 @@ module Main where
 
 import qualified Data.Map as M
 import qualified Data.Set as S
+import Data.Either
 import System.Environment
-import System.IO.Error (try)
-import Control.Exception (bracket)
+import Control.Exception (bracket, try, SomeException)
 import Text.Show.Pretty
 import Control.Monad.State.Strict
 import qualified Github.Data.Readable as Github
@@ -367,7 +367,7 @@ gatherMetaData repo = do
 
 storeRetry :: [Request] -> Git.Repo -> IO ()
 storeRetry [] r = do
-	_ <- try $ removeFile (retryFile r)
+	_ <- try $ removeFile (retryFile r) :: IO (Either SomeException ()) 
 	return ()
 storeRetry retryrequests r = writeFile (retryFile r) (show retryrequests)
 
@@ -441,9 +441,9 @@ backupUser username = do
 				, Param dir
 				]
 			unless ok $ error "clone failed"
-		isJust <$> catchMaybeIO
-			(backup =<< Git.Construct.fromPath dir)
-	unless (all (== True) status) $
+		try (backup =<< Git.Construct.fromPath dir)
+			:: IO (Either SomeException ())
+	unless (null $ lefts status) $
 		error "Failed to successfully back everything up. Run again later."
 
 usage :: String
