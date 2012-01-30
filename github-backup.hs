@@ -83,11 +83,11 @@ newtype Backup a = Backup { runBackup :: StateT BackupState IO a }
 	)
 
 inRepo :: (Git.Repo -> IO a) -> Backup a
-inRepo a = liftIO . a =<< gets backupRepo
+inRepo a = liftIO . a =<< getState backupRepo
 
 failedRequest :: Request -> Github.Error-> Backup ()
 failedRequest req e = unless (ignorable e) $ do
-	set <- gets failedRequests
+	set <- getState failedRequests
 	changeState $ \s -> s { failedRequests = S.insert req set }
 	where
 		ignorable (Github.JsonError m) =
@@ -100,7 +100,7 @@ runRequest req@(RequestNum base _) = runRequest' base req
 runRequest' :: RequestBase -> Request -> Backup ()
 runRequest' base req = do
 	-- avoid re-running requests that were already retried
-	retried <- gets retriedRequests
+	retried <- getState retriedRequests
 	if S.member req retried
 		then return ()
 		else (lookupApi base) req
@@ -229,17 +229,17 @@ store filebase req val = do
 
 workDir :: Backup FilePath
 workDir = (</>)
-		<$> (Git.gitDir <$> gets backupRepo)
+		<$> (Git.gitDir <$> getState backupRepo)
 		<*> pure "github-backup.tmp"
 
 storeSorted :: Ord a => Show a => FilePath -> Request -> [a] -> Backup ()
 storeSorted file req val = store file req (sort val)
 
 gitHubRepos :: Backup [Git.Repo]
-gitHubRepos = fst . unzip . gitHubPairs <$> gets backupRepo
+gitHubRepos = fst . unzip . gitHubPairs <$> getState backupRepo
 
 gitHubRemotes :: Backup [GithubUserRepo]
-gitHubRemotes = snd . unzip . gitHubPairs <$> gets backupRepo
+gitHubRemotes = snd . unzip . gitHubPairs <$> getState backupRepo
 
 gitHubPairs :: Git.Repo -> [(Git.Repo, GithubUserRepo)]
 gitHubPairs = filter (not . wiki ) . mapMaybe check . Git.Types.remotes
@@ -298,7 +298,7 @@ onGithubBranch r a = bracket prep cleanup (const a)
 commitWorkDir :: Backup ()
 commitWorkDir = do
 	dir <- workDir
-	r <- gets backupRepo
+	r <- getState backupRepo
 	liftIO $ whenM (doesDirectoryExist dir) $ onGithubBranch r $ do
 		_ <- boolSystem "git"
 			[Param "--work-tree", File dir, Param "add", Param "."]
@@ -309,7 +309,7 @@ commitWorkDir = do
 
 updateWiki :: GithubUserRepo -> Backup ()
 updateWiki fork = do
-	remotes <- Git.remotes <$> gets backupRepo
+	remotes <- Git.remotes <$> getState backupRepo
 	if (null $ filter (\r -> Git.remoteName r == Just remote) remotes)
 		then do
 			-- github often does not really have a wiki,
@@ -401,7 +401,7 @@ retry = do
 			"Retrying " ++ show (length todo) ++
 			" requests that failed last time..."
 		mapM_ runRequest todo
-	retriedfailed <- gets failedRequests
+	retriedfailed <- getState failedRequests
 	changeState $ \s -> s
 		{ failedRequests = S.empty
 		, retriedRequests = S.fromList todo
@@ -411,7 +411,7 @@ retry = do
 backup :: Backup ()
 backup = do
 	retriedfailed <- retry
-	remotes <- gitHubPairs <$> gets backupRepo
+	remotes <- gitHubPairs <$> getState backupRepo
 	when (null remotes) $ do
 		error "no github remotes found"
 	forM_ remotes $ \(repo, remote) -> do
@@ -427,7 +427,7 @@ backup = do
 save :: S.Set Request -> Backup ()
 save retriedfailed = do
 	commitWorkDir
-	failed <- gets failedRequests
+	failed <- getState failedRequests
 	let toretry = S.toList failed ++ S.toList retriedfailed
 	inRepo $ storeRetry toretry
 	unless (null toretry) $ do
