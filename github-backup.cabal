@@ -8,7 +8,7 @@ Stability: Stable
 Copyright: 2012 Joey Hess
 License-File: GPL
 Build-Type: Simple
-Extra-Source-Files: README.md Makefile git-annex.1
+Extra-Source-Files: README.md Makefile github-backup.1
  Common.hs github-backup.hs Git/Url.hs Git/Types.hs Git/Queue.hs Git/Ref.hs
  Git/Branch.hs Git/Sha.hs Git/Config.hs Git/Command.hs Git/Construct.hs
  Setup.hs Github/Data/Readable.hs Utility/Path.hs Utility/TempFile.hs
