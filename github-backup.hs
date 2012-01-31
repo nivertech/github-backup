@@ -56,15 +56,17 @@ repoWikiUrl (GithubUserRepo user remote) =
 type ApiName = String
 
 -- A request to make of github. It may have an extra parameter.
-data RequestBase = RequestBase ApiName GithubUserRepo
-	deriving (Eq, Show, Read, Ord)
-data Request = RequestSimple RequestBase
-	| RequestNum RequestBase Int
+data Request = RequestSimple ApiName GithubUserRepo
+	| RequestNum ApiName GithubUserRepo Int
 	deriving (Eq, Show, Read, Ord)
 
 requestRepo :: Request -> GithubUserRepo
-requestRepo (RequestSimple (RequestBase _ repo)) = repo
-requestRepo (RequestNum (RequestBase _ repo) _) = repo
+requestRepo (RequestSimple _ repo) = repo
+requestRepo (RequestNum _ repo _) = repo
+
+requestName :: Request -> String
+requestName (RequestSimple name _) = name
+requestName (RequestNum name _ _) = name
 
 data BackupState = BackupState
 	{ failedRequests :: S.Set Request
@@ -95,14 +97,11 @@ failedRequest req e = unless (ignorable e) $ do
 		ignorable _ = False
 
 runRequest :: Request -> Backup ()
-runRequest req@(RequestSimple base) = runRequest' base req
-runRequest req@(RequestNum base _) = runRequest' base req
-runRequest' :: RequestBase -> Request -> Backup ()
-runRequest' base req = do
+runRequest req = do
 	-- avoid re-running requests that were already retried
 	retried <- getState retriedRequests
 	unless (S.member req retried) $
-		(lookupApi base) req
+		(lookupApi req) req
 
 type Storer = Request -> Backup ()
 data ApiListItem = ApiListItem ApiName Storer Bool
@@ -128,9 +127,10 @@ toplevelApi :: [ApiName]
 toplevelApi = map (\(ApiListItem n _ _) -> n) $
 	filter (\(ApiListItem _ _ toplevel) -> toplevel) apiList
 
-lookupApi :: RequestBase -> Storer
-lookupApi (RequestBase name _) = fromMaybe bad $ M.lookup name api
+lookupApi :: Request -> Storer
+lookupApi req = fromMaybe bad $ M.lookup name api
 	where
+		name = requestName req
 		bad = error $ "internal error: bad api call: " ++ name
 
 userrepoStore :: Storer
@@ -147,7 +147,7 @@ pullrequestsStore = simpleHelper Github.pullRequestsFor $
 	forValues $ \req r -> do
 		let repo = requestRepo req
 		let n = Github.pullRequestNumber r
-		runRequest $ RequestNum (RequestBase "pullrequest" repo) n
+		runRequest $ RequestNum "pullrequest" repo n
 
 pullrequestStore :: Storer
 pullrequestStore = numHelper Github.pullRequest $ \n ->
@@ -164,7 +164,7 @@ issuesStore = withHelper Github.issuesForRepo [] $ forValues $ \req i -> do
 	let repo = requestRepo req
 	let n = Github.issueNumber i
 	store ("issue" </> show n) req i
-	runRequest (RequestNum (RequestBase "issuecomments" repo) n)
+	runRequest (RequestNum "issuecomments" repo n)
 
 issuecommentsStore :: Storer
 issuecommentsStore = numHelper Github.Issues.Comments.comments $ \n ->
@@ -190,17 +190,17 @@ type Handler v = Request -> v -> Backup ()
 type Helper = Request -> Backup ()
 
 simpleHelper :: ApiCall v -> Handler v -> Helper
-simpleHelper call handle req@(RequestSimple (RequestBase _ (GithubUserRepo user repo))) =
+simpleHelper call handle req@(RequestSimple _ (GithubUserRepo user repo)) =
 	either (failedRequest req) (handle req) =<< liftIO (call user repo)
 simpleHelper _ _ r = badRequest r
 
 withHelper :: ApiWith v b -> b -> Handler v -> Helper
-withHelper call b handle req@(RequestSimple (RequestBase _ (GithubUserRepo user repo))) =
+withHelper call b handle req@(RequestSimple _ (GithubUserRepo user repo)) =
 	either (failedRequest req) (handle req) =<< liftIO (call user repo b)
 withHelper _ _ _ r = badRequest r
 
 numHelper :: ApiNum v -> (Int -> Handler v) -> Helper
-numHelper call handle req@(RequestNum (RequestBase _ (GithubUserRepo user repo)) num) =
+numHelper call handle req@(RequestNum _ (GithubUserRepo user repo) num) =
 	either (failedRequest req) (handle num req) =<< liftIO (call user repo num)
 numHelper _ _ r = badRequest r
 
@@ -364,8 +364,7 @@ gatherMetaData repo = do
 	liftIO $ putStrLn $ "Gathering metadata for " ++ repoUrl repo ++ " ..."
 	mapM_ call toplevelApi
 	where
-		call name = runRequest $
-			RequestSimple $ RequestBase name repo
+		call name = runRequest $ RequestSimple name repo
 
 storeRetry :: [Request] -> Git.Repo -> IO ()
 storeRetry [] r = do
@@ -395,6 +394,14 @@ retry = do
 		}
 	return retriedfailed
 
+summarizeRequests :: [Request] -> [String]
+summarizeRequests = go M.empty
+	where
+		go m [] = map format $ sort $ map swap $ M.toList m
+		go m (r:rs) = go (M.insertWith (+) (requestName r) (1 :: Integer) m) rs
+		format (num, name) = show num ++ "\t" ++ name
+		swap (a, b) = (b, a)
+
 {- Save all backup data. Files that were written to the workDir are committed.
  - Requests that failed are saved for next time. Requests that were retried
  - this time and failed are ordered last, to ensure that we don't get stuck
@@ -407,9 +414,12 @@ save retriedfailed = do
 	let toretry = S.toList failed ++ S.toList retriedfailed
 	inRepo $ storeRetry toretry
 	unless (null toretry) $
-		error $ "Backup may be incomplete; " ++
-			show (length toretry) ++
-			" requests failed. Run again later."
+		error $ unlines $
+			["Backup may be incomplete; " ++ 
+				show (length toretry) ++ " requests failed:"
+			] ++ map ("  " ++) (summarizeRequests toretry) ++ 
+			[ "Run again later."
+			]
 
 newState :: Git.Repo -> BackupState
 newState = BackupState S.empty S.empty
