@@ -56,6 +56,9 @@ github-backup is repository-focused. It does not try to back up other
 information from GitHub. In particular, social network stuff, like
 users who are following you, is not backed up.
 
+github-backup does not log into git, so it cannot backup private
+repositories.
+
 github-backup will find and backup forks of a repository, and all forks
 of those forks, etc. However, it cannot go *up* the fork tree. So if
 your GitHub repositoriy is a fork of something else, the something else
