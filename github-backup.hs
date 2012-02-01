@@ -71,7 +71,7 @@ requestName (RequestNum name _ _) = name
 data BackupState = BackupState
 	{ failedRequests :: S.Set Request
 	, retriedRequests :: S.Set Request
-	, backupRepo :: Git.Repo
+	, gitRepo :: Git.Repo
 	}
 
 {- Our monad. -}
@@ -85,7 +85,7 @@ newtype Backup a = Backup { runBackup :: StateT BackupState IO a }
 	)
 
 inRepo :: (Git.Repo -> IO a) -> Backup a
-inRepo a = liftIO . a =<< getState backupRepo
+inRepo a = liftIO . a =<< getState gitRepo
 
 failedRequest :: Request -> Github.Error-> Backup ()
 failedRequest req e = unless (ignorable e) $ do
@@ -225,7 +225,7 @@ store filebase req val = do
 
 workDir :: Backup FilePath
 workDir = (</>)
-		<$> (Git.gitDir <$> getState backupRepo)
+		<$> (Git.gitDir <$> getState gitRepo)
 		<*> pure "github-backup.tmp"
 
 storeSorted :: Ord a => Show a => FilePath -> Request -> [a] -> Backup ()
@@ -246,10 +246,10 @@ storedFile file (GithubUserRepo user repo) = do
 	return $ top </> user ++ "_" ++ repo </> file
 
 gitHubRepos :: Backup [Git.Repo]
-gitHubRepos = fst . unzip . gitHubPairs <$> getState backupRepo
+gitHubRepos = fst . unzip . gitHubPairs <$> getState gitRepo
 
 gitHubRemotes :: Backup [GithubUserRepo]
-gitHubRemotes = snd . unzip . gitHubPairs <$> getState backupRepo
+gitHubRemotes = snd . unzip . gitHubPairs <$> getState gitRepo
 
 gitHubPairs :: Git.Repo -> [(Git.Repo, GithubUserRepo)]
 gitHubPairs = filter (not . wiki ) . mapMaybe check . Git.Types.remotes
@@ -308,7 +308,7 @@ onGithubBranch r a = bracket prep cleanup (const a)
 commitWorkDir :: Backup ()
 commitWorkDir = do
 	dir <- workDir
-	r <- getState backupRepo
+	r <- getState gitRepo
 	let git_false_worktree ps = boolSystem "git" $
 		[ Param ("--work-tree=" ++ dir)
 		, Param ("--git-dir=" ++ Git.gitDir r)
@@ -321,7 +321,7 @@ commitWorkDir = do
 
 updateWiki :: GithubUserRepo -> Backup ()
 updateWiki fork = do
-	remotes <- Git.remotes <$> getState backupRepo
+	remotes <- Git.remotes <$> getState gitRepo
 	if any (\r -> Git.remoteName r == Just remote) remotes
 		then do
 			_ <- fetchwiki
@@ -444,12 +444,12 @@ save retriedfailed = do
 newState :: Git.Repo -> BackupState
 newState = BackupState S.empty S.empty
 
-backup :: Git.Repo -> IO ()
-backup repo = evalStateT (runBackup go) . newState =<< Git.Config.read repo
+backupRepo :: Git.Repo -> IO ()
+backupRepo repo = evalStateT (runBackup go) . newState =<< Git.Config.read repo
 	where
 		go = do
 			retriedfailed <- retry
-			remotes <- gitHubPairs <$> getState backupRepo
+			remotes <- gitHubPairs <$> getState gitRepo
 			when (null remotes) $
 				error "no github remotes found"
 			forM_ remotes $ \(r, remote) -> do
@@ -457,12 +457,15 @@ backup repo = evalStateT (runBackup go) . newState =<< Git.Config.read repo
 				gatherMetaData remote
 			save retriedfailed
 
-backupUser :: String -> IO ()
-backupUser username = do
-	repos <- either (error . show) id <$>
-		Github.userRepos username Github.All
+backupName :: String -> IO ()
+backupName name = do
+	userrepos <- either (const []) id <$>
+		Github.userRepos name Github.All
+	orgrepos <- either (const []) id <$>
+		Github.organizationRepos name
+	let repos = userrepos ++ orgrepos
 	when (null repos) $
-		error $ "No GitHub repositories found for user " ++ username
+		error $ "No GitHub repositories found for " ++ name
 	status <- forM repos $ \repo -> do
 		let dir = Github.repoName repo
 		unlessM (doesDirectoryExist dir) $ do
@@ -473,17 +476,17 @@ backupUser username = do
 				, Param dir
 				]
 			unless ok $ error "clone failed"
-		try (backup =<< Git.Construct.fromPath dir)
+		try (backupRepo =<< Git.Construct.fromPath dir)
 			:: IO (Either SomeException ())
 	unless (null $ lefts status) $
 		error "Failed to successfully back everything up. Run again later."
 
 usage :: String
-usage = "usage: github-backup [username]"
+usage = "usage: github-backup [username|organization]"
 
 main :: IO ()
 main = getArgs >>= go
 	where
-		go [] = backup =<< Git.Construct.fromCwd
-		go (username:[]) = backupUser username
+		go [] = backupRepo =<< Git.Construct.fromCwd
+		go (name:[]) = backupName name
 		go _= error usage

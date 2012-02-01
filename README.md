@@ -19,7 +19,7 @@ Or use cabal:
   from GitHub to back up that repository.
 
   Or, run `github-backup username` to clone and back up all of a GitHub
-  user's repositories.
+  user's repositories. (Also works for organization names.)
 
 ## Why backup GitHub repositories
 
