@@ -36,13 +36,13 @@ There are a couple of reasons to want to back this stuff up:
 
 Each time you run github-backup, it will find any new forks on GitHub. It
 will add remotes to your repository for the forks, using names like
-`github_linus_divemonitor`. It will fetch from every fork.
+`github_torvalds_subsurface`. It will fetch from every fork.
 
 It downloads metadata from each fork. This is stored
 into a branch named "github". Each fork gets a directory in there,
-like `linus_divemonitor`. Inside the directory there will be some
-files, like `linus_divemonitor/watchers`. There may be further
-directories, like for comments: `linus_divemonitor/comments/1`.
+like `torvalds_subsurface`. Inside the directory there will be some
+files, like `torvalds_subsurface/watchers`. There may be further
+directories, like for comments: `torvalds_subsurface/comments/1`.
 
 You can follow the commits to the github branch to see what information
 changed on GitHub over time.
